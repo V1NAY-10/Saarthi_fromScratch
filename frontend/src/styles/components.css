@@ -422,5 +422,48 @@
 .tok { display: inline-flex; align-items: center; gap: 4px; padding: 3px 7px; border-radius: 6px; font-size: 11.5px; font-weight: 600; margin: 3px 4px 0 0; }
 .tok.exact { background: var(--ok-soft); color: var(--ok); }
 .tok.initial, .tok.spelling { background: var(--warn-soft); color: var(--warn); }
-.tok.different { background: var(--bad-soft); color: var(--bad); }
 .cat-bank_account { background: #f1ecfd; color: #6941c6; }
+
+/* ───────────── Financial Planner ───────────── */
+.planner-hero { background: radial-gradient(120% 140% at 100% 0%, #1b78e6 0%, #0a4bb5 45%, #062a63 100%); color: #fff; border-radius: var(--r-xl); padding: 18px; position: relative; overflow: hidden; box-shadow: 0 12px 30px rgba(6, 42, 99, 0.22); }
+.planner-hero::after { content: ''; position: absolute; right: -30px; bottom: -50px; width: 180px; height: 180px; border-radius: 50%; border: 24px solid rgba(255, 255, 255, 0.05); }
+.planner-score-row { display: flex; align-items: center; gap: 16px; margin-top: 14px; background: rgba(255, 255, 255, 0.1); border-radius: 16px; padding: 12px 14px; backdrop-filter: blur(10px); }
+.planner-factors { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 12px; }
+.planner-factor-item { background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 12px; padding: 9px 10px; font-size: 11.5px; }
+.meter-container { height: 7px; background: var(--line-2); border-radius: 4px; overflow: hidden; margin-top: 6px; position: relative; }
+.meter-fill { height: 100%; border-radius: 4px; transition: width 0.4s var(--ease); }
+.meter-fill.green { background: linear-gradient(90deg, #10b981, #059669); }
+.meter-fill.cyan { background: linear-gradient(90deg, #06b6d4, #0891b2); }
+.meter-fill.amber { background: linear-gradient(90deg, #f59e0b, #d97706); }
+.meter-fill.red { background: linear-gradient(90deg, #ef4444, #dc2626); }
+.meter-fill.brand { background: var(--saarthi); }
+
+.goal-card { padding: 14px; border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line-2); box-shadow: var(--sh-1); }
+.goal-card + .goal-card { margin-top: 10px; }
+.goal-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.goal-icon { width: 36px; height: 36px; border-radius: 10px; display: grid; place-items: center; font-size: 18px; flex-shrink: 0; background: var(--brand-soft); color: var(--brand); }
+.goal-linked-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 7px; border-radius: 6px; background: #e0f2fe; color: #0369a1; font-size: 10.5px; font-weight: 600; margin-top: 6px; }
+
+.sim-box { background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-lg); padding: 14px; box-shadow: var(--sh-1); }
+.slider-group { margin-top: 12px; }
+.slider-label { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: var(--ink-2); margin-bottom: 4px; }
+.sim-range { width: 100%; height: 6px; border-radius: 3px; accent-color: var(--brand); cursor: pointer; }
+
+.verdict-card { border-radius: 14px; padding: 14px; margin-top: 12px; }
+.verdict-safe { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; }
+.verdict-caution { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+.verdict-danger { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+
+.playbook-step { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px dashed var(--line); font-size: 12px; }
+.playbook-step:first-child { border-top: none; }
+.playbook-num { width: 20px; height: 20px; border-radius: 50%; background: var(--brand); color: #fff; display: grid; place-items: center; font-size: 10px; font-weight: 700; flex-shrink: 0; margin-top: 1px; }
+
+.subtab-nav { display: flex; gap: 6px; overflow-x: auto; padding: 4px 2px 8px; margin: 10px 0; scrollbar-width: none; }
+.subtab-btn { flex-shrink: 0; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: 600; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2); transition: all 0.15s; }
+.subtab-btn.active { background: var(--brand-ink); color: #fff; border-color: var(--brand-ink); box-shadow: 0 2px 6px rgba(6, 39, 94, 0.2); }
+
+.rec-card { border-left: 4px solid var(--brand); padding: 12px 14px; border-radius: 12px; background: var(--surface); border-top: 1px solid var(--line-2); border-right: 1px solid var(--line-2); border-bottom: 1px solid var(--line-2); }
+.rec-card.high { border-left-color: var(--bad); }
+.rec-card.medium { border-left-color: var(--warn); }
+.rec-card.low { border-left-color: var(--ok); }
+

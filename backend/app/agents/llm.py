@@ -29,9 +29,11 @@ class LLMRefusal(Exception):
 
 # ------------------------------------------------------------------ Gemini
 def _gemini():
-    if "gemini" not in _clients:
+    if "gemini" not in _clients or _clients.get("gemini_key") != config.GEMINI_API_KEY:
         from google import genai
+        print(f"[GEMINI] Initialising client - key={config.GEMINI_API_KEY[:8] if config.GEMINI_API_KEY else 'NOT SET'}...")
         _clients["gemini"] = genai.Client(api_key=config.GEMINI_API_KEY)
+        _clients["gemini_key"] = config.GEMINI_API_KEY
     return _clients["gemini"]
 
 
@@ -71,6 +73,7 @@ class _GeminiLoop:
             self.contents.append(t.Content(role="user", parts=[
                 t.Part.from_function_response(name=r["name"], response={"result": r["output"]}) for r in results]))
         resp = _gemini().models.generate_content(model=config.GEMINI_MODEL, contents=self.contents, config=self.config)
+        print(f"[GEMINI] tool_loop.send() -> model={config.GEMINI_MODEL} candidates={len(resp.candidates or [])}")
         if not resp.candidates:
             raise LLMRefusal("Gemini returned no candidates (blocked prompt)")
         cand = resp.candidates[0]
@@ -89,9 +92,11 @@ def _gemini_complete(system: str, user: str, max_tokens: int) -> str | None:
     from google.genai import types
     for attempt in range(3):
         try:
+            print(f"[GEMINI] complete() attempt={attempt + 1} model={config.GEMINI_MODEL} max_tokens={max_tokens}")
             resp = _gemini().models.generate_content(
                 model=config.GEMINI_MODEL, contents=user,
                 config=types.GenerateContentConfig(system_instruction=system, temperature=0.3, max_output_tokens=max_tokens))
+            print(f"[GEMINI] complete() -> {len(resp.text or '')} chars")
             return (resp.text or "").strip() or None
         except Exception as e:
             err = str(e).lower()

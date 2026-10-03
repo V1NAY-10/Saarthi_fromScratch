@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 
 from app import config
 from app.agents import orchestrator
-from app.api import app_routes, applications, journeys, knowledge, partner, saarthi, vault
+from app.api import app_routes, applications, journeys, knowledge, partner, planner, saarthi, vault
 from app.database import db, seed
 from app.knowledge import retrieval
 from app.product.journeys import NotFound, ProductError
@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO)
 app = FastAPI(title="Saarthi API", description="AI operating layer for financial journeys", version="2.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-for r in (app_routes.router, journeys.router, knowledge.router, saarthi.router, partner.router, vault.router, applications.router):
+for r in (app_routes.router, journeys.router, knowledge.router, saarthi.router, partner.router, vault.router, applications.router, planner.router):
     app.include_router(r)
 
 

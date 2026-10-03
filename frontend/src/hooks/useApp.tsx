@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { api, setApiUser } from '../services/api'
 import type { Overview } from '../services/types'
 
-export type Tab = 'home' | 'invest' | 'saarthi' | 'loans'
+export type Tab = 'home' | 'invest' | 'saarthi' | 'plan' | 'loans'
 export type Route =
   | { name: 'journey'; id: string; autoApprove?: boolean }
   | { name: 'journeys' }

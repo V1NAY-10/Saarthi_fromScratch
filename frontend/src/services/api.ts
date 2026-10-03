@@ -1,6 +1,7 @@
 import type {
-  Account, AuditEntry, ChatReply, Decision, Fund, Journey, JourneyView, KnowledgeEntry, Overview, PartnerOffer, Precheck,
-  Profile, Scenario, Sip, SipStartResult, SystemInfo, VaultDocument,
+  Account, AffordabilityResult, AuditEntry, ChatReply, DebtPayoffResult, Decision, Fund, Journey, JourneyView, KnowledgeEntry,
+  Overview, PartnerOffer, PlanChangeLog, PlannerGoal, PlannerObligation, PlannerOverview, Precheck, Profile, Scenario,
+  Sip, SipStartResult, StressTestResult, SystemInfo, VaultDocument, WhatIfResult,
 } from './types'
 
 let userId: string | null = null
@@ -25,6 +26,8 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const post = <T>(path: string, body: unknown = {}) => req<T>(path, { method: 'POST', body: JSON.stringify(body) })
+const put = <T>(path: string, body: unknown = {}) => req<T>(path, { method: 'PUT', body: JSON.stringify(body) })
+const del = <T>(path: string) => req<T>(path, { method: 'DELETE' })
 
 export const api = {
   // onboarding
@@ -86,4 +89,27 @@ export const api = {
   scenarios: () => req<Scenario[]>('/api/demo/scenarios'),
   runScenario: (id: string) => post<{ journey_id: string }>(`/api/demo/scenarios/${id}`),
   reset: () => post<{ ok: boolean }>('/api/demo/reset'),
+  // financial planner
+  plannerOverview: () => req<PlannerOverview>('/api/planner/overview'),
+  plannerUpdateProfile: (b: Partial<PlannerOverview['profile']>) => post<PlannerOverview>('/api/planner/profile', b),
+  plannerGoals: () => req<PlannerGoal[]>('/api/planner/goals'),
+  plannerCreateGoal: (b: { name: string; category?: string; target_amount: number; current_amount?: number; target_date: string; monthly_contribution?: number; priority?: number; notes?: string }) =>
+    post<PlannerGoal>('/api/planner/goals', b),
+  plannerUpdateGoal: (id: string, b: Partial<PlannerGoal>) => put<PlannerGoal>(`/api/planner/goals/${id}`, b),
+  plannerDeleteGoal: (id: string) => del<{ ok: boolean }>(`/api/planner/goals/${id}`),
+  plannerLinkGoal: (goalId: string, b: { investment_id: string; investment_type?: string; allocated_amount: number }) =>
+    post<PlannerGoal>(`/api/planner/goals/${goalId}/link`, b),
+  plannerUpcoming: () => req<PlannerObligation[]>('/api/planner/upcoming'),
+  plannerCalendar: () => req<any>('/api/planner/calendar'),
+  plannerChangelog: (limit = 20) => req<PlanChangeLog[]>(`/api/planner/changelog?limit=${limit}`),
+  plannerAffordability: (b: { amount: number; is_recurring?: boolean; frequency?: string; category?: string }) =>
+    post<AffordabilityResult>('/api/planner/affordability', b),
+  plannerWhatIf: (b: { income_delta_pct?: number; sip_delta_abs?: number; expense_delta_abs?: number; one_time_expense?: number }) =>
+    post<WhatIfResult>('/api/planner/what-if', b),
+  plannerStressTest: (b: { stress_type: string }) =>
+    post<StressTestResult>('/api/planner/stress-test', b),
+  plannerDebtPayoff: (b: { liability_id?: string; outstanding_balance?: number; current_emi?: number; annual_interest_rate_pct?: number; extra_monthly_payment: number }) =>
+    post<DebtPayoffResult>('/api/planner/debt/extra-payment', b),
+  plannerChat: (message: string) => post<{ reply: string; data?: any }>('/api/planner/chat', { message }),
+  plannerLoadScenario: (scenarioId: number) => post<{ ok: boolean; scenario: any }>(`/api/planner/demo/scenario/${scenarioId}`),
 }

@@ -240,3 +240,229 @@ export interface SystemInfo {
   knowledge?: { active_engine: 'cognee' | 'bm25'; cognee_state: string; reason: string; sections: number; failure_codes: number }
   storage?: { backend: string; cloudinary_configured: boolean }
 }
+
+// ---------------------- Financial Planner Types ----------------------
+export interface PlannerGoal {
+  id: string
+  user_id: string
+  name: string
+  category: string
+  target_amount: number
+  current_amount: number
+  target_date: string
+  monthly_contribution: number
+  priority: number
+  status: string
+  notes?: string
+  linked_investments: { investment_id: string; investment_type: string; allocated_amount: number }[]
+  months_remaining: number
+  progress_pct: number
+  monthly_required: number
+  on_track: boolean
+  shortfall_projected: number
+}
+
+export interface PlannerHealthFactor {
+  key: string
+  name: string
+  score: number
+  max_score: number
+  status: 'EXCELLENT' | 'GOOD' | 'NEEDS_WORK' | 'CRITICAL'
+  comment: string
+}
+
+export interface PlannerHealthScore {
+  overall: number
+  band: 'EXCELLENT' | 'HEALTHY' | 'MODERATE' | 'VULNERABLE' | 'CRITICAL'
+  factors: PlannerHealthFactor[]
+}
+
+export interface PlannerEmergencyFund {
+  current_liquid: number
+  monthly_essential: number
+  current_runway_months: number
+  target_runway_months: number
+  recommended_corpus: number
+  gap: number
+  status: 'ADEQUATE' | 'DEFICIT' | 'CRITICAL_DEFICIT'
+  status_label: string
+}
+
+export interface PlannerCashFlow {
+  income: number
+  essential_expenses: number
+  discretionary_expenses: number
+  total_expenses: number
+  emis: number
+  sips: number
+  total_obligations: number
+  estimated_surplus: number
+  savings_rate_pct: number
+  free_cash_flow: number
+}
+
+export interface PlannerNetWorth {
+  total_assets: number
+  total_liabilities: number
+  net_worth: number
+  asset_breakdown: {
+    liquid_cash: number
+    investments: number
+    other_assets: number
+    total_assets?: number
+  }
+  liability_breakdown: {
+    loans: number
+    credit_cards: number
+    other_liabilities: number
+    total_liabilities?: number
+  }
+}
+
+export interface PlannerObligation {
+  id: string
+  title: string
+  amount: number
+  due: string
+  category: string
+  status: string
+  recipient?: string
+  source?: string
+}
+
+export interface PlannerRecommendation {
+  id: string
+  category: string
+  urgency: 'HIGH' | 'MEDIUM' | 'LOW'
+  title: string
+  description: string
+  impact_summary: string
+  actionable_journey?: string
+  suggested_action?: string
+}
+
+export interface PlannerOverview {
+  user_id: string
+  profile: {
+    monthly_income: number
+    essential_expenses: number
+    discretionary_expenses: number
+    target_runway_months: number
+    risk_tolerance: string
+    retirement_age: number
+  }
+  net_worth: PlannerNetWorth
+  cash_flow: PlannerCashFlow
+  health_score: PlannerHealthScore
+  emergency_fund: PlannerEmergencyFund
+  active_plan: {
+    version: number
+    name: string
+    updated_at: string
+  }
+  goals: PlannerGoal[]
+  recommendations: PlannerRecommendation[]
+  obligations: PlannerObligation[]
+  auto_budget: {
+    needs_pct: number
+    wants_pct: number
+    savings_pct: number
+    rule: string
+    compliant: boolean
+  }
+  insights: { tone: 'ok' | 'warn' | 'info'; text: string }[]
+}
+
+export interface AffordabilityResult {
+  can_afford: boolean
+  verdict: string
+  verdict_tone: 'SAFE' | 'CAUTION' | 'HIGH_RISK'
+  purchase_amount: number
+  is_recurring: boolean
+  frequency: string
+  impact_on_runway: {
+    runway_before_months: number
+    runway_after_months: number
+    is_safe: boolean
+  }
+  impact_on_goals: {
+    affected_goals: { goal_name: string; delay_months: number }[]
+  }
+  recommendations: string[]
+  trade_offs: string[]
+}
+
+export interface WhatIfResult {
+  current: {
+    surplus: number
+    runway_months: number
+    savings_rate_pct: number
+  }
+  simulated: {
+    income: number
+    expenses: number
+    obligations: number
+    surplus: number
+    runway_months: number
+    savings_rate_pct: number
+  }
+  delta: {
+    surplus_change: number
+    runway_change: number
+    savings_rate_change: number
+  }
+  goal_impacts: {
+    goal_id: string
+    goal_name: string
+    target_amount: number
+    months_remaining: number
+    current_target_date: string
+    new_projected_date: string
+    delta_months: number
+    status: 'ACCELERATED' | 'DELAYED' | 'UNCHANGED'
+  }[]
+}
+
+export interface StressTestResult {
+  stress_name: string
+  test_income: number
+  test_expenses: number
+  test_liquid: number
+  surplus_deficit: number
+  survival_runway_months: number
+  risk_level: 'LOW' | 'MODERATE' | 'CRITICAL'
+  recovery_playbook: {
+    step: number
+    action: string
+    savings_potential: number
+    priority: string
+  }[]
+}
+
+export interface DebtPayoffResult {
+  baseline: {
+    total_interest: number
+    payoff_months: number
+    payoff_years: number
+  }
+  with_extra: {
+    total_interest: number
+    payoff_months: number
+    payoff_years: number
+  }
+  savings: {
+    interest_saved: number
+    time_saved_months: number
+    time_saved_years: number
+  }
+}
+
+export interface PlanChangeLog {
+  id: string
+  user_id: string
+  version: number
+  change_type: string
+  description: string
+  created_at: string
+}
+

@@ -105,6 +105,33 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   id TEXT PRIMARY KEY, journey_id TEXT, status TEXT, mode TEXT, model TEXT,
   trace_json TEXT, error TEXT, started_at TEXT, finished_at TEXT
 );
+CREATE TABLE IF NOT EXISTS financial_profiles (
+  user_id TEXT PRIMARY KEY, monthly_income REAL, income_source TEXT, income_verified INTEGER,
+  essential_expenses REAL, discretionary_expenses REAL, target_runway_months REAL,
+  emergency_fund_target REAL, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS financial_goals (
+  id TEXT PRIMARY KEY, user_id TEXT, name TEXT, category TEXT, target_amount REAL,
+  current_amount REAL, target_date TEXT, monthly_contribution REAL, priority INTEGER,
+  status TEXT, notes TEXT, created_at TEXT, updated_at TEXT
+);
+CREATE TABLE IF NOT EXISTS goal_investments (
+  goal_id TEXT, investment_id TEXT, investment_type TEXT, allocated_amount REAL,
+  PRIMARY KEY (goal_id, investment_id)
+);
+CREATE TABLE IF NOT EXISTS financial_liabilities (
+  id TEXT PRIMARY KEY, user_id TEXT, name TEXT, lender TEXT, kind TEXT, total_amount REAL,
+  outstanding_amount REAL, emi_amount REAL, interest_rate REAL, tenure_months INTEGER,
+  start_date TEXT, next_due_date TEXT, journey_id TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS financial_scenarios (
+  id TEXT PRIMARY KEY, user_id TEXT, name TEXT, scenario_type TEXT, inputs_json TEXT,
+  output_json TEXT, created_at TEXT
+);
+CREATE TABLE IF NOT EXISTS planner_change_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT, ts TEXT, change_type TEXT,
+  previous_val TEXT, new_val TEXT, reason TEXT, impact_summary TEXT, affected_goals_json TEXT
+);
 """
 
 
