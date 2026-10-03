@@ -15,7 +15,7 @@ export function ApprovalSheet({ open, onClose, option, decision, view, onApprove
   const acc = view.linked_account
   const retryNote = <div className="saarthi-strip" style={{ marginTop: 12 }}><SaarthiMark size={20} /><div className="t">Then {j.partner_name} re-presents your <b>{inr(t === 'reduce_sip_to_limit' ? p.new_amount : j.amount)}</b> SIP debit and Saarthi verifies the outcome with the bank.</div></div>
   let body, cta = 'Approve'
-  if (t === 'fund_and_retry') {
+  if (t === 'fund_and_retry' || t === 'fund_and_retry_payment') {
     cta = `Approve & move ${inr(p.amount)}`
     body = (
       <div className="card card-pad" style={{ background: 'var(--surface-2)' }}>
@@ -27,7 +27,60 @@ export function ApprovalSheet({ open, onClose, option, decision, view, onApprove
         <div className="display num" style={{ fontSize: 30, fontWeight: 800, textAlign: 'center', margin: '14px 0 2px' }}>{inr(p.amount)}</div>
         <div className="muted" style={{ textAlign: 'center', fontSize: 12 }}>exactly the shortfall, nothing more</div>
         <div style={{ textAlign: 'center', margin: '6px 0 -4px' }}><ArrowDown size={16} className="muted" /></div>
+        {t === 'fund_and_retry' ? retryNote : <div className="saarthi-strip" style={{ marginTop: 12 }}><SaarthiMark size={20} /><div className="t">Then {j.partner_name.split(' (')[0]} collects the premium again and Saarthi checks the result.</div></div>}
+      </div>
+    )
+  } else if (t === 'submit_existing_document') {
+    cta = 'Approve & submit document'
+    body = (
+      <div className="card card-pad" style={{ background: 'var(--surface-2)' }}>
+        <div className="eyebrow">Share one document with the partner</div>
+        <div className="kv" style={{ marginTop: 10 }}>
+          <span className="k">Document</span><span className="v">{p.label}</span>
+          <span className="k">What it shows</span><span className="v">{p.summary}</span>
+          <span className="k">Sent to</span><span className="v">{p.partner}</span>
+          <span className="k">Why</span><span className="v">Meets the partner's rule</span>
+        </div>
+        <div className="saarthi-strip" style={{ marginTop: 12 }}><FileCheck2 size={18} color="var(--brand)" /><div className="t">Only this exact version is shared. Saarthi then checks the partner's response and tells you the result.</div></div>
+      </div>
+    )
+  } else if (t === 'request_document_upload') {
+    cta = "OK, I'll upload it"
+    body = (
+      <div className="card card-pad" style={{ background: 'var(--surface-2)' }}>
+        <div className="eyebrow">A new document is needed</div>
+        <div style={{ fontWeight: 700, fontSize: 14, marginTop: 8 }}>{p.requirement}</div>
+        <div className="saarthi-strip" style={{ marginTop: 12 }}><SaarthiMark size={20} /><div className="t">Add it to your vault from the journey screen. Saarthi checks it against the partner's rule and asks before submitting anything.</div></div>
+      </div>
+    )
+  } else if (t === 'switch_partner_account') {
+    cta = `Use ${p.label}`
+    body = (
+      <div className="card card-pad" style={{ background: 'var(--surface-2)' }}>
+        <div className="eyebrow">Change the account on the application</div>
+        <div style={{ fontWeight: 800, fontSize: 16, marginTop: 8 }}>{p.label}</div>
+        <div className="muted" style={{ fontSize: 12 }}>Verified in your name</div>
+      </div>
+    )
+  } else if (t === 'create_new_mandate') {
+    cta = `Approve new mandate`
+    body = (
+      <div className="card card-pad" style={{ background: 'var(--surface-2)' }}>
+        <div className="eyebrow">Register a new autopay mandate</div>
+        <div className="kv" style={{ marginTop: 10 }}>
+          <span className="k">Replaces</span><span className="v">{p.old_umrn}</span>
+          <span className="k">Limit per debit</span><span className="v">{inr(p.max_amount)}</span>
+        </div>
         {retryNote}
+      </div>
+    )
+  } else if (t === 'retry_payment') {
+    cta = `Approve payment of ${inr(p.amount)}`
+    body = (
+      <div className="card card-pad" style={{ background: 'var(--surface-2)' }}>
+        <div className="eyebrow">Pay the premium</div>
+        <div className="display num" style={{ fontSize: 28, fontWeight: 800, marginTop: 8 }}>{inr(p.amount)}</div>
+        <div className="muted" style={{ fontSize: 12 }}>from {acc?.bank} {acc?.masked}</div>
       </div>
     )
   } else if (t === 'retry_debit') {
@@ -108,6 +161,14 @@ function preview(actionType: string, bank: string): string[] {
     raise_mandate_limit_and_retry: [`Amending the mandate with ${bank}`, `Asking ${bank} to re-present the debit`, `Verifying the outcome with ${bank}`],
     reduce_sip_to_limit: ['Updating your SIP amount', `Asking ${bank} to re-present the debit`, `Verifying the outcome with ${bank}`],
     verify_ownership_via_aa: ['Creating consent artefact', `Fetching the holder profile from ${bank}`, 'Comparing PAN with your KYC', `Confirming verification with ${bank}`, 'Verifying the outcome'],
+    submit_existing_document: [`Submitting the document to ${bank}`, `Verifying the outcome with ${bank}`],
+    request_document_upload: ['Watching your vault for a matching document'],
+    switch_partner_account: [`Updating the account with ${bank}`, `Verifying the outcome with ${bank}`],
+    create_new_mandate: [`Registering a new mandate with ${bank}`, `Asking ${bank} to re-present the debit`, `Verifying the outcome with ${bank}`],
+    retry_payment: [`Asking ${bank} to collect the payment`, `Verifying the outcome with ${bank}`],
+    fund_and_retry_payment: ['Transferring the shortfall', `Asking ${bank} to collect the payment`, `Verifying the outcome with ${bank}`],
+    retry_with_partner: [`Retrying with ${bank}`, 'Verifying the outcome'],
+    refresh_status: [`Re-checking status with ${bank}`, 'Verifying the outcome'],
   } as Record<string, string[]>)[actionType] ?? ['Executing']
 }
 
@@ -132,7 +193,7 @@ export function Execution({ actionType, result, view, onDone }: { actionType: st
       <div style={{ padding: '58px 20px 16px' }}>
         <div className="row"><SaarthiMark size={28} /><span className="eyebrow" style={{ color: 'var(--brand)' }}>Act → Verify</span></div>
         <div className="display" style={{ fontSize: 22, fontWeight: 800, marginTop: 10 }}>
-          {finished ? (ok ? 'Recovered & verified' : 'Stopped safely, re-assessing') : 'Saarthi is recovering your journey'}
+          {finished ? (ok ? (actionType === 'request_document_upload' ? 'Waiting for your document' : 'Recovered & verified') : 'Stopped safely, re-assessing') : 'Saarthi is working on it'}
         </div>
         <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>Every step is executed through the partner and checked before moving on.</div>
       </div>

@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
-import { Bell, CalendarClock, CheckCircle2, ChevronRight, Eye, EyeOff, Info, Landmark, Plus, TrendingUp, TriangleAlert, UserRound } from 'lucide-react'
+import { Bell, CalendarClock, CheckCircle2, ChevronRight, Eye, EyeOff, Info, Landmark, Plus, TrendingUp, TriangleAlert } from 'lucide-react'
+
 import { useState } from 'react'
 import { AttentionCard, issueCopy } from '../components/journey'
 import { BankLogo, CategoryIcon, SaarthiMark, Skeleton } from '../components/ui'
@@ -20,7 +21,7 @@ export function Home() {
   return (
     <div>
       <div className="hello">
-        <button className="avatar" onClick={() => setTab('profile')} aria-label="Profile">{o.user.name.split(' ').map(x => x[0]).slice(0, 2).join('')}</button>
+        <button className="avatar" onClick={() => push({ name: 'profile' })} aria-label="Profile">{o.user.name.split(' ').map(x => x[0]).slice(0, 2).join('')}</button>
         <div className="grow">
           <div className="muted" style={{ fontSize: 12 }}>{greeting()}</div>
           <div style={{ fontWeight: 700, fontSize: 17, letterSpacing: '-0.01em' }}>{first}</div>
@@ -51,9 +52,8 @@ export function Home() {
         <div className="quick">
           {[
             { l: 'Invest', I: TrendingUp, f: () => setTab('invest') },
-            { l: 'Banks', I: Landmark, f: () => setTab('banks') },
-            { l: 'Link bank', I: Plus, f: () => push({ name: 'linkBank' }) },
-            { l: 'Profile', I: UserRound, f: () => setTab('profile') },
+            { l: 'Loans', I: Plus, f: () => setTab('loans') },
+            { l: 'Banks', I: Landmark, f: () => push({ name: 'banks' }) },
           ].map(({ l, I, f }) => (
             <button key={l} onClick={f}><span className="qi"><I size={20} /></span>{l}</button>
           ))}

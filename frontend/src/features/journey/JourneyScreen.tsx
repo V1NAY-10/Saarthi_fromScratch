@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from 'framer-motion'
-import { Eye, Headset, MessageCircle, Plus, RefreshCw, ShieldCheck } from 'lucide-react'
+import { Eye, FileUp, Headset, MessageCircle, Plus, RefreshCw, ShieldCheck } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { UploadSheet } from '../../components/UploadSheet'
 import { HealthRing, SaarthiMark, Skeleton, StatusPill, TopBar } from '../../components/ui'
 import { useApp, useData } from '../../hooks/useApp'
 import { BalanceSheet } from '../../pages/Banks'
@@ -11,7 +12,8 @@ import { AgentBadge, AgentTrace } from './AgentTrace'
 import { ApprovalSheet, Execution } from './Approval'
 import { AuditTab } from './AuditTab'
 import {
-  DecisionCard, EvidenceKnowledge, NameMatch, Normalization, Options, ResolvedCard, SupportCaseCard, TierExplainer, WhatHappened,
+  DecisionCard, EvidenceKnowledge, FoundTheCause, NameMatch, Normalization, Options, ResolvedCard, SupportCaseCard, TierExplainer,
+  UnknownCard, WhatHappened,
 } from './DiagnosisTab'
 import { GraphTab } from './GraphTab'
 import { HealthSheet } from './HealthSheet'
@@ -32,6 +34,7 @@ export function JourneyScreen({ id, autoApprove }: { id: string; autoApprove?: b
   const [healthOpen, setHealthOpen] = useState(false)
   const [approveOpen, setApproveOpen] = useState(false)
   const [topUp, setTopUp] = useState(false)
+  const [uploadOpen, setUploadOpen] = useState(false)
   const [exec, setExec] = useState<{ type: string; result: JourneyView | null } | null>(null)
   const [busy, setBusy] = useState(false)
 
@@ -68,7 +71,9 @@ export function JourneyScreen({ id, autoApprove }: { id: string; autoApprove?: b
   const option = d && decision ? d.options.find(o => o.id === decision.option_id)! : null
   const completed = view.actions.find(a => a.status === 'COMPLETED' && a.result?.steps && a.action_type !== 'remind_before_window')
   const pendingAction = view.actions.find(a => a.status === 'PENDING_APPROVAL')
-  const waitingTopUp = j.status === 'ATTENTION' && j.stage === 'Waiting for a top-up'
+  const waitingDoc = j.status === 'ATTENTION' && j.stage === 'Waiting for your document'
+  const monitoring = j.status === 'ATTENTION' && j.stage === 'Monitoring partner'
+  const waitingTopUp = (j.status === 'ATTENTION' && j.stage === 'Waiting for a top-up') || waitingDoc || monitoring
   const run = view.agent_run
 
   async function approve() {
@@ -142,7 +147,26 @@ export function JourneyScreen({ id, autoApprove }: { id: string; autoApprove?: b
                 {showLive && run && <Investigating view={view} onDone={endLive} />}
                 {j.status === 'RESOLVED' && completed && <ResolvedCard view={view} action={completed} />}
                 {j.status === 'ESCALATED' && view.support_case && <SupportCaseCard view={view} />}
-                {waitingTopUp && view.linked_account && (
+                {waitingDoc && (
+                  <div className="card card-pad card-saarthi">
+                    <div className="row"><FileUp size={18} color="var(--brand)" /><div className="card-title">Waiting for your document</div></div>
+                    <p className="ink2" style={{ fontSize: 13, lineHeight: 1.5, marginTop: 8 }}>
+                      Needed: <b>{j.state.waiting_requirement}</b>. Add it to your vault and Saarthi checks it against the partner's rule straight away, then asks before submitting.
+                    </p>
+                    <button className="btn btn-primary btn-block" style={{ marginTop: 12 }} onClick={() => setUploadOpen(true)}><FileUp size={15} /> Upload document</button>
+                  </div>
+                )}
+                {monitoring && d && (
+                  <div className="card card-pad card-saarthi">
+                    <div className="row"><Eye size={18} color="var(--brand)" /><div className="card-title">Saarthi is monitoring the partner</div></div>
+                    <p className="ink2" style={{ fontSize: 13, lineHeight: 1.5, marginTop: 8 }}>{d.explanation.summary}</p>
+                    <div className="row" style={{ gap: 8, marginTop: 12 }}>
+                      <button className="btn btn-soft grow" onClick={() => pickAlt('opt-refresh_status')}><RefreshCw size={14} /> Check now</button>
+                      <button className="btn btn-ghost grow" disabled={busy} onClick={escalate}><Headset size={14} /> Escalate</button>
+                    </div>
+                  </div>
+                )}
+                {waitingTopUp && !waitingDoc && !monitoring && view.linked_account && (
                   <div className="card card-pad card-saarthi">
                     <div className="row"><Eye size={18} color="var(--brand)" /><div className="card-title">Saarthi is watching for a top-up</div></div>
                     <p className="ink2" style={{ fontSize: 13, lineHeight: 1.5, marginTop: 8 }}>
@@ -154,7 +178,9 @@ export function JourneyScreen({ id, autoApprove }: { id: string; autoApprove?: b
                 {d ? (
                   <>
                     {j.status !== 'ATTENTION' && <div className="eyebrow" style={{ margin: '18px 4px 8px' }}>Original diagnosis</div>}
+                    <UnknownCard d={d} />
                     <WhatHappened d={d} run={run} />
+                    <FoundTheCause d={d} decision={decision} />
                     <NameMatch d={d} />
                     <Normalization d={d} />
                     {decision && <DecisionCard d={d} decision={decision} view={view} />}
@@ -193,7 +219,7 @@ export function JourneyScreen({ id, autoApprove }: { id: string; autoApprove?: b
           ) : (
             <button className="btn btn-primary btn-lg btn-block" onClick={() => setApproveOpen(true)}>Review & approve recovery</button>
           )}
-          <div className="hint"><ShieldCheck size={13} /> {decision.tier === 'TIER_3' ? "Saarthi won't act on an account it can't prove is yours" : 'Nothing happens without your approval'}</div>
+          <div className="hint"><ShieldCheck size={13} /> {decision.tier === 'TIER_3' ? (d?.unknown ? "Saarthi doesn't guess on codes it can't identify" : 'Automatic action is blocked for safety') : 'Nothing happens without your approval'}</div>
         </div>
       )}
 
@@ -202,6 +228,8 @@ export function JourneyScreen({ id, autoApprove }: { id: string; autoApprove?: b
         <ApprovalSheet open={approveOpen} onClose={() => setApproveOpen(false)} option={option} decision={decision} view={view} onApprove={approve} />
       )}
       <BalanceSheet account={topUp ? view.linked_account : null} onClose={() => { setTopUp(false); reload() }} />
+      <UploadSheet open={uploadOpen} onClose={() => setUploadOpen(false)} want={j.state.waiting_for_document ?? undefined}
+        onDone={() => { reload(); setTab('agent') }} />
       <AnimatePresence>
         {exec && <Execution actionType={exec.type} result={exec.result} view={view} onDone={() => { setExec(null); bump(); reload(); setTab('diagnosis') }} />}
       </AnimatePresence>

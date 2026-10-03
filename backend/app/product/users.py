@@ -50,10 +50,8 @@ def register(name: str, phone: str, email: str, dob: str, pan: str) -> dict:
     res = connectors.call("nsdl", "verify_pan", pan=pan, name=name, dob=dob)
     ok = res["normalized"]["state"] == "VERIFIED"
     db.update("users", "id", uid, {"kyc_status": "VERIFIED" if ok else "FAILED"})
-    db.insert("documents", {"id": f"doc-pan-{uid}", "user_id": uid, "doc_type": "PAN", "name": "PAN Card",
-                            "status": "VERIFIED" if ok else "FAILED", "source": "PAN registry (sandbox)",
-                            "updated_at": db.now_iso(),
-                            "meta": {"name": name, "dob": dob, "number": pan[:5] + "••••" + pan[-1]}})
+    from app.product import vault
+    vault.create_registry_record({"id": uid, "name": name, "dob": dob, "pan": pan}, ok)
     journal.audit(None, "kyc", "KYC_VERIFIED" if ok else "KYC_FAILED",
                   f"PAN {pan[:5]}••••{pan[-1]} {'verified' if ok else 'rejected'} by PAN registry",
                   {"registry": res["raw"]}, user_id=uid)

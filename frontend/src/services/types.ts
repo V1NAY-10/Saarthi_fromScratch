@@ -34,7 +34,7 @@ export interface SipStartResult {
 
 export interface Journey {
   id: string
-  category: 'investment' | 'bank_account'
+  category: 'investment' | 'bank_account' | 'loan' | 'insurance' | 'kyc'
   title: string
   subtitle: string
   partner_id: string
@@ -72,7 +72,7 @@ export interface Decision {
   checks: Check[]; reasons: string[]; confidence: number
 }
 
-export interface KnowledgeHit { id: string; kind: string; title: string; body: string; score: number }
+export interface KnowledgeHit { id: string; kind: string; title: string; body: string; score: number; engine?: 'cognee' | 'bm25'; source?: string }
 
 export interface Lesson {
   partner: string; partner_code: string; failure_type: string; diagnosis: string; action: string; outcome: string
@@ -93,9 +93,10 @@ export interface Diagnosis {
   normalized: {
     partner_code: string; failure_type: string; standard_code: string; meaning: string; root_cause: string
     evidence_required: string[]; retry_allowed: boolean; policy_tier: Tier; expected_outcome: string
+    analyzer?: string | null; risk_level?: string; possible_causes?: string[]; escalation_conditions?: string[]
     equivalents: { partner_id: string; code: string }[]
   }
-  kb_entry: { id: string; title: string; body: string; data: Record<string, any> }
+  kb_entry: { id: string; title: string; body: string; source?: string; data: Record<string, any> } | null
   evidence: Evidence[]
   facts: Fact[]
   metrics: Record<string, any>
@@ -112,6 +113,8 @@ export interface Diagnosis {
   explanation: { headline: string; summary: string; safety_note: string; source: 'llm' | 'deterministic'; grounding: { passed: boolean; numbers_checked: number; unsupported: string[] }; llm_rejected?: boolean }
   decisions: { by_option: Record<string, Decision>; primary_option_id: string | null; primary: Decision | null }
   agent?: { run_id: string; mode: string; chosen_by: 'claude' | 'planner' }
+  unknown?: boolean
+  document_evidence?: DocumentEvidence | null
   pending_action_id?: string
   lesson?: Lesson
   health_transition?: { before: number; after: number }
@@ -149,9 +152,37 @@ export interface Action {
 export interface GraphNode { id: string; kind: string; label: string; sub?: string | null; state: string }
 export interface GraphData { nodes: GraphNode[]; edges: { from: string; to: string; label: string }[] }
 
+export interface DocVersion {
+  id: string; version: number; status: string; uploaded_at: string; mime_type: string | null; size: number
+  original_name: string | null; storage: string; fields: Record<string, any>; checks: Record<string, any>; has_file: boolean
+}
+
 export interface VaultDocument {
   id: string; doc_type: string; name: string; status: string; source: string; updated_at: string
-  meta: Record<string, any>
+  meta: Record<string, any>; latest_version: number; latest_version_id: string; expiry_date: string | null
+  versions: DocVersion[]; used_by: { journey_id: string; role: string; version_id: string; title: string }[]
+  duplicate?: boolean
+}
+
+export interface Candidate {
+  document_id: string; version_id: string; version: number; name: string; summary: string; ok: boolean
+  issues: string[]; already_submitted?: boolean; evidence?: { required: string; found: string }[]
+}
+
+export interface ChecklistItem { doc_type: string; role: string; label: string; requirement: string; candidates: Candidate[] }
+export interface Precheck { journey_id: string; checklist: ChecklistItem[]; saarthi_note: string; problems: string[]; missing: string[] }
+
+export interface PartnerOffer {
+  partner_id: string; name: string; product: string; tagline?: string; rate?: number; max_amount?: number
+  min_income?: number; plan?: string; cover?: number; premium_per_year?: number
+  requirements: { doc_type: string; label: string }[]
+}
+
+export interface Scenario { id: string; title: string; family: string; what: string }
+
+export interface DocumentEvidence {
+  doc_type: string; doc_label: string; required: string; found: string; rule?: string
+  submitted: { name: string; version: number; summary: string } | null; candidates: Candidate[]
 }
 
 export interface SupportCase { id: string; journey_id: string; created_at: string; priority: string; status: string; payload: Record<string, any> }
@@ -188,7 +219,7 @@ export interface Overview {
   overall_health: number
   intelligence: AuditEntry[]
   insights: { tone: 'ok' | 'warn' | 'info'; text: string; journey_id?: string }[]
-  system: { demo_mode: boolean; llm_enabled: boolean; model: string; agent_mode: 'claude' | 'deterministic' }
+  system: SystemInfo
 }
 
 export interface ChatCard {
@@ -202,4 +233,10 @@ export interface KnowledgeEntry {
   id: string; kind: string; partner_id: string | null; code: string | null; title: string; body: string
   data: Record<string, any>
   learned?: { occurrences: number; resolved: number; success_rate: number; avg_resolution_s: number; last_outcome: string | null }
+}
+
+export interface SystemInfo {
+  demo_mode: boolean; llm_enabled: boolean; model: string; agent_mode: 'claude' | 'deterministic'
+  knowledge?: { active_engine: 'cognee' | 'bm25'; cognee_state: string; reason: string; sections: number; failure_codes: number }
+  storage?: { backend: string; cloudinary_configured: boolean }
 }

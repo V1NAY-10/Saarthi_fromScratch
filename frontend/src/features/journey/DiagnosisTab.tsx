@@ -113,6 +113,59 @@ export function NameMatch({ d }: { d: Diagnosis }) {
   )
 }
 
+/* ── Saarthi found the cause (document & identity failures) ───────────────────────────── */
+export function FoundTheCause({ d, decision }: { d: Diagnosis; decision: Decision | null }) {
+  const ev = d.document_evidence
+  if (!ev) return null
+  const engine = d.knowledge[0]?.engine
+  return (
+    <motion.div className="card card-pad card-saarthi" {...fade(1)}>
+      <div className="row"><SaarthiMark size={20} /><span className="eyebrow" style={{ color: 'var(--brand)' }}>Saarthi found the cause</span></div>
+      <div style={{ fontWeight: 800, fontSize: 16, marginTop: 8 }}>{d.normalized.meaning}</div>
+      <div className="eyebrow" style={{ marginTop: 12 }}>Evidence</div>
+      <div className="match" style={{ marginTop: 6 }}>
+        <div className="doc good"><div className="k">{d.partner.partner_name.split(' (')[0]} requires</div><div className="v" style={{ fontSize: 12.5 }}>{ev.required}</div></div>
+        <div style={{ textAlign: 'center' }}><ArrowRight size={18} className="muted" /></div>
+        <div className="doc bad"><div className="k">Your {ev.doc_label.toLowerCase()}</div><div className="v" style={{ fontSize: 12.5 }}>{ev.found}</div>
+          {ev.submitted && <div className="s">{ev.submitted.name} v{ev.submitted.version}</div>}</div>
+      </div>
+      {ev.candidates.length > 0 && <>
+        <div className="eyebrow" style={{ marginTop: 14 }}>Saarthi checked your Document Vault</div>
+        {ev.candidates.map(c => (
+          <div key={c.version_id} className="cand">
+            <div className="grow">
+              <div style={{ fontWeight: 600 }}>{c.name} v{c.version}{c.already_submitted ? ' · submitted' : ''}</div>
+              <div className="muted" style={{ fontSize: 11 }}>{c.summary}{!c.ok && c.issues[0] ? ` · ${c.issues[0]}` : ''}</div>
+            </div>
+            <span className={`mini-flag ${c.ok ? 'ok' : 'no'}`}>{c.ok ? '✓ meets rule' : '✗ fails rule'}</span>
+          </div>
+        ))}
+      </>}
+      <div className="kv" style={{ marginTop: 14 }}>
+        <span className="k">Knowledge source</span>
+        <span className="v">{d.kb_entry?.source ? <span className="mono" style={{ fontSize: 11 }}>knowledge/{d.kb_entry.source}</span> : 'Partner rule'}{engine ? ` · ${engine === 'cognee' ? 'Cognee' : 'BM25'}` : ''}</span>
+        {decision && <><span className="k">Decision</span><span className="v">{TIER_TEXT[decision.tier].short} · {TIER_TEXT[decision.tier].long}</span></>}
+      </div>
+    </motion.div>
+  )
+}
+
+export function UnknownCard({ d }: { d: Diagnosis }) {
+  if (!d.unknown) return null
+  return (
+    <motion.div className="card card-pad" style={{ borderColor: '#f3d9a6', background: 'var(--warn-soft)' }} {...fade(0)}>
+      <div className="row"><FileWarning size={20} color="var(--warn)" /><div style={{ fontWeight: 800, fontSize: 15 }}>Saarthi couldn't confidently identify this issue</div></div>
+      <div className="kv" style={{ marginTop: 12 }}>
+        <span className="k">Partner</span><span className="v">{d.partner.partner_name}</span>
+        <span className="k">Code</span><span className="v mono">{d.partner.raw_code}</span>
+        <span className="k">Knowledge found</span><span className="v">Nothing that reliably describes this code</span>
+        <span className="k">Action</span><span className="v">Human review required</span>
+      </div>
+      <p className="ink2" style={{ fontSize: 12.5, lineHeight: 1.5, marginTop: 10 }}>Saarthi doesn't guess. Unknown partner codes are never acted on automatically.</p>
+    </motion.div>
+  )
+}
+
 /* ── Decision: why Saarthi decided this ───────────────────────────── */
 export function DecisionCard({ d, decision, view }: { d: Diagnosis; decision: Decision; view: JourneyView }) {
   const [showAll, setShowAll] = useState(false)
@@ -201,8 +254,8 @@ export function EvidenceKnowledge({ d }: { d: Diagnosis }) {
         <div style={{ marginTop: 10 }}>
           <div className="eyebrow">Evidence (system of record)</div>
           {d.evidence.map(e => <CheckRow key={e.key} passed={e.verified} label={`${e.label}: ${e.display}`} detail={e.source + (e.note ? ` · ${e.note}` : '')} />)}
-          <div className="eyebrow" style={{ marginTop: 12 }}>Retrieved knowledge (BM25)</div>
-          {[{ id: d.kb_entry.id, title: d.kb_entry.title, score: 1, kind: 'partner rule · exact match' }, ...d.knowledge].map(k => (
+          <div className="eyebrow" style={{ marginTop: 12 }}>Retrieved knowledge ({d.knowledge[0]?.engine === 'cognee' ? 'Cognee' : 'BM25 fallback'})</div>
+          {[...(d.kb_entry ? [{ id: d.kb_entry.id, title: d.kb_entry.title, score: 1, kind: 'partner rule · exact registry match' }] : []), ...d.knowledge].map(k => (
             <div key={k.id} className="between" style={{ padding: '7px 0', borderTop: '1px solid var(--line-2)' }}>
               <div className="grow">
                 <div style={{ fontSize: 12.5, fontWeight: 600 }}>{k.title}</div>
@@ -233,12 +286,14 @@ export function ResolvedCard({ view, action }: { view: JourneyView; action: Acti
         <div className="success-hero">
           <div className="success-badge"><CheckCircle2 size={34} /></div>
           <div className="display" style={{ fontSize: 20, fontWeight: 800 }}>
-            {view.journey.category === 'investment' ? 'Your installment went through' : 'Bank account verified'}
+            {({ investment: 'Your installment went through', bank_account: 'Bank account verified', loan: 'Loan disbursed',
+              insurance: 'Policy issued', kyc: 'Identity verified' } as Record<string, string>)[view.journey.category]}
           </div>
           <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
             {view.journey.category === 'investment'
               ? `${inr(view.journey.amount)} debited · Ref ${view.journey.state.bank_ref ?? ''} · units allotted`
-              : `${view.journey.partner_name} confirmed ownership · ready for SIP autopay`}
+              : view.journey.category === 'bank_account' ? `${view.journey.partner_name} confirmed ownership · ready for SIP autopay`
+                : `${view.journey.partner_name.split(' (')[0]} accepted the documents · verified with the partner`}
           </div>
           {d.health_transition && (
             <div className="transition">

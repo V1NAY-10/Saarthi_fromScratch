@@ -21,6 +21,9 @@ FAIL_TEXT = {
     "confidence": "Diagnosis confidence below the 75% safety threshold",
     "reversible": "Action cannot be undone",
     "funds": "Source account cannot cover the transfer",
+    "mapped": "Partner code is not in the knowledge base",
+    "rule": "No partner rule could be retrieved",
+    "retry_budget": "Two automatic retries already failed",
 }
 
 
@@ -43,11 +46,12 @@ def decide(diag: dict, option: dict, ctx: dict) -> dict:
     checks = [
         _check("status", "Partner status identified", bool(diag.get("partner", {}).get("raw_code")),
                f"{diag.get('partner', {}).get('partner_name')}: {diag.get('partner', {}).get('raw_code')}"),
-        _check("mapped", "Partner failure mapped", bool(norm),
-               f"{norm.get('partner_code')} → {norm.get('standard_code')}" if norm else "Unknown code"),
+        _check("mapped", "Partner failure mapped", bool(norm) and norm.get("failure_type") != "UNKNOWN",
+               f"{norm.get('partner_code')} → {norm.get('standard_code')}" if norm.get("failure_type") != "UNKNOWN"
+               else f"{norm.get('partner_code')} is not in the knowledge base"),
         *[_check(f"ev-{e['key']}", f"{e['label']} verified", e["verified"], e["display"], blocking=False)
           for e in evidence],
-        _check("rule", "Partner rule retrieved", bool(diag.get("kb_entry")), diag.get("kb_entry", {}).get("title", "—")),
+        _check("rule", "Partner rule retrieved", bool(diag.get("kb_entry")), (diag.get("kb_entry") or {}).get("title", "—")),
         _check("evidence", "Required evidence verified", all(e["verified"] for e in evidence),
                f"{sum(e['verified'] for e in evidence)}/{len(evidence)} verified"),
         _check("cause", "Root cause confirmed", diag.get("root_cause_confirmed", False), norm.get("root_cause", "—")),
@@ -60,7 +64,10 @@ def decide(diag: dict, option: dict, ctx: dict) -> dict:
         _check("reversible", "Action is reversible", fx["reversible"],
                "Reversible" if fx["reversible"] else "Cannot be undone automatically"),
     ]
-    if option["action_type"] == "fund_and_retry":
+    if option["action_type"] == "retry_with_partner":
+        checks.append(_check("retry_budget", "Automatic retry budget available", option["params"].get("attempt", 1) <= 2,
+                             f"Attempt {option['params'].get('attempt', 1)} of 2"))
+    if option["action_type"] in ("fund_and_retry", "fund_and_retry_payment"):
         p = option["params"]
         checks.append(_check("funds", "Source account can cover transfer", p.get("source_balance", 0) >= p.get("amount", 0),
                              f"{p.get('source_label')} → {p.get('target_label')}"))
@@ -76,20 +83,26 @@ def decide(diag: dict, option: dict, ctx: dict) -> dict:
         reasons += [_fail_reason(c) for c in blocking_fail]
         if fx["changes_identity"]:
             reasons.append("Edits identity data")
-    elif fx["moves_money"] or fx["shares_data"] or fx["changes_terms"]:
+    elif fx["moves_money"] or fx["shares_data"] or fx["changes_terms"] or fx.get("needs_customer"):
         tier = "TIER_2"
-        reasons.append("Moves money" if fx["moves_money"] else "Shares your financial data" if fx["shares_data"]
-                       else "Changes your investment terms")
+        if fx.get("needs_customer") and not (fx["moves_money"] or fx["shares_data"] or fx["changes_terms"]):
+            reasons.append("Needs a document from you")
+        if fx["moves_money"] or fx["shares_data"] or fx["changes_terms"]:
+            reasons.append("Moves money" if fx["moves_money"] else "Shares your data with the partner"
+                           if fx["shares_data"] else "Changes your investment terms")
         if fx["changes_terms"] and fx["moves_money"]:
             reasons.append("Changes your mandate or SIP terms")
+    elif fx.get("partner_call") and not (diag.get("kb_entry") or {}).get("data", {}).get("automatic_action_allowed"):
+        tier = "TIER_2"
+        reasons.append("Partner rules don't allow automatic retries for this code")
     else:
         tier = "TIER_1"
-        reasons.append("Read-only / reversible, no financial impact")
+        reasons.append("Read-only / safely repeatable, no financial impact")
 
     # Partner policy is a floor - Saarthi can be stricter than the partner, never looser.
     policy_tier = norm.get("policy_tier")
-    impactful = fx["moves_money"] or fx["shares_data"] or fx["changes_terms"]
-    if policy_tier and impactful and             option["action_type"] in diag.get("kb_entry", {}).get("data", {}).get("recovery_actions", []):
+    impactful = fx["moves_money"] or fx["shares_data"] or fx["changes_terms"] or fx.get("needs_customer")
+    if policy_tier and impactful and             option["action_type"] in (diag.get("kb_entry") or {}).get("data", {}).get("recovery_actions", []):
         if TIER_RANK[policy_tier] > TIER_RANK[tier]:
             reasons.append(f"Partner policy requires {policy_tier}")
             tier = policy_tier

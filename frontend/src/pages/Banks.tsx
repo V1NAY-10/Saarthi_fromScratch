@@ -8,12 +8,12 @@ import { inr } from '../services/format'
 import type { Account } from '../services/types'
 
 export function Banks() {
-  const { overview: o, push } = useApp()
+  const { overview: o, push, pop } = useApp()
   const [money, setMoney] = useState<Account | null>(null)
   if (!o) return <div className="page"><Skeleton h={200} /></div>
   return (
     <div>
-      <TopBar title="Bank accounts" sub="Autopay sources for your SIPs" />
+      <TopBar title="Bank accounts" sub="Autopay and payout accounts" onBack={pop} />
       <div className="page">
         <div className="card card-pad">
           <div className="muted" style={{ fontSize: 12 }}>Total across {o.accounts.length} account{o.accounts.length === 1 ? '' : 's'}</div>

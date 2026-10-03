@@ -10,6 +10,8 @@ import { EnginePanel } from './pages/EnginePanel'
 import { FundDetail } from './pages/FundDetail'
 import { Home } from './pages/Home'
 import { Invest } from './pages/Invest'
+import { Apply } from './pages/Apply'
+import { Loans } from './pages/Loans'
 import { Onboarding } from './pages/Onboarding'
 import { SaarthiHub } from './pages/SaarthiHub'
 import { JourneysList, Knowledge, Profile } from './pages/Secondary'
@@ -17,7 +19,7 @@ import { JourneysList, Knowledge, Profile } from './pages/Secondary'
 function Screen() {
   const { userId, tab, stack, chat, toast } = useApp()
   const top = stack[stack.length - 1]
-  const key = !userId ? 'onboarding' : top ? `${top.name}-${'id' in top ? top.id : ''}-${stack.length}` : tab
+  const key = !userId ? 'onboarding' : top ? `${top.name}-${'id' in top ? top.id : 'kind' in top ? top.kind : ''}-${stack.length}` : tab
   const scroller = useRef<HTMLDivElement>(null)
   useEffect(() => { scroller.current?.scrollTo({ top: 0 }) }, [key])
 
@@ -28,7 +30,10 @@ function Screen() {
   else if (top?.name === 'knowledge') content = <Knowledge />
   else if (top?.name === 'fund') content = <FundDetail id={top.id} />
   else if (top?.name === 'linkBank') content = <LinkBank />
-  else content = { home: <Home />, invest: <Invest />, saarthi: <SaarthiHub />, banks: <Banks />, profile: <Profile /> }[tab]
+  else if (top?.name === 'apply') content = <Apply kind={top.kind} partnerId={top.partnerId} />
+  else if (top?.name === 'banks') content = <Banks />
+  else if (top?.name === 'profile') content = <Profile />
+  else content = { home: <Home />, invest: <Invest />, saarthi: <SaarthiHub />, loans: <Loans /> }[tab]
 
   const now = new Date()
   return (

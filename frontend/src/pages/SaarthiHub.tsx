@@ -1,5 +1,7 @@
 import { motion } from 'framer-motion'
-import { Activity, BookOpen, ChevronRight, FileText, MessageCircle } from 'lucide-react'
+import { Activity, BookOpen, ChevronRight, MessageCircle } from 'lucide-react'
+
+import { DemoScenarios } from '../components/DemoScenarios'
 import { issueCopy } from '../components/journey'
 import { CategoryIcon, HealthPill, HealthRing, SaarthiMark, Skeleton } from '../components/ui'
 import { useApp } from '../hooks/useApp'
@@ -12,7 +14,8 @@ const EVENT_ICON: Record<string, string> = {
 }
 
 export function SaarthiHub() {
-  const { overview: o, push, openChat, setTab } = useApp()
+  const { overview: o, push, openChat } = useApp()
+
   if (!o) return <div className="page"><Skeleton h={180} /><Skeleton h={200} /></div>
   const name = (id: string | null) => o.journeys.find(j => j.id === id)?.title ?? ''
   return (
@@ -38,6 +41,19 @@ export function SaarthiHub() {
           <MessageCircle size={18} color="var(--brand)" /> <span className="grow">Ask about any journey: “Why did my SIP fail?”</span>
           <span className="btn btn-soft btn-sm">Ask</span>
         </button>
+
+        {(() => {
+          const approvals = o.journeys.filter(j => j.status === 'ATTENTION' && j.saarthi?.tier === 'TIER_2' && !['Waiting for your document', 'Waiting for a top-up', 'Monitoring partner'].includes(j.stage))
+          const docs = o.journeys.filter(j => j.stage === 'Waiting for your document' || (j.status === 'ATTENTION' && j.saarthi?.failure_type?.startsWith('DOC')))
+          const resolved = o.journeys.filter(j => j.status === 'RESOLVED')
+          return (
+            <div className="stat-grid" style={{ marginTop: 14 }}>
+              <div className="stat"><div className="k">Need attention</div><div className="v">{o.attention.length}</div></div>
+              <div className="stat"><div className="k">Your approval</div><div className="v">{approvals.length}</div></div>
+              <div className="stat"><div className="k">Resolved</div><div className="v" style={{ color: 'var(--ok)' }}>{resolved.length}{docs.length ? '' : ''}</div></div>
+            </div>
+          )
+        })()}
 
         <div className="section">
           <div className="section-head"><div className="section-title">What needs your attention?</div></div>
@@ -78,6 +94,10 @@ export function SaarthiHub() {
         </div>
 
         <div className="section">
+          <div className="card card-pad"><DemoScenarios /></div>
+        </div>
+
+        <div className="section">
           <div className="section-head"><div className="section-title">What Saarthi is doing</div><Activity size={16} className="muted" /></div>
           <div className="card">
             {o.intelligence.slice(0, 8).map(a => (
@@ -97,11 +117,6 @@ export function SaarthiHub() {
             <button className="list-row tap" style={{ width: '100%', textAlign: 'left' }} onClick={() => push({ name: 'knowledge' })}>
               <div className="cat-icon cat-investment" style={{ width: 34, height: 34 }}><BookOpen size={16} /></div>
               <div className="grow"><div className="t">Failure knowledge</div><div className="s">Partner codes, rules & learned outcomes</div></div>
-              <ChevronRight size={16} className="muted" />
-            </button>
-            <button className="list-row tap" style={{ width: '100%', textAlign: 'left' }} onClick={() => setTab('profile')}>
-              <div className="cat-icon cat-kyc" style={{ width: 34, height: 34 }}><FileText size={16} /></div>
-              <div className="grow"><div className="t">Document Vault</div><div className="s">Your documents as journey evidence</div></div>
               <ChevronRight size={16} className="muted" />
             </button>
           </div>

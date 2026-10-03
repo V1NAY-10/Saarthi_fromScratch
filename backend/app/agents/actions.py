@@ -146,12 +146,113 @@ def _remind(j, p):
     return [_step("Reminder scheduled", ok=True, detail="No money moved · reversible")], True
 
 
+def _partner_step(j, label, op, **kw):
+    r = connectors.call(j["partner_id"], op, journey_id=j["id"], **kw)
+    n = r["normalized"]
+    ok = n["state"] in ("SUCCESS", "VERIFIED")
+    detail = n["raw_message"] or ""
+    if n["raw_code"]:
+        detail += f" · {n['raw_code']}"
+    return r, ok, _step(label, r, ok, detail.strip(" ·") or n["state"])
+
+
+def _submit_document(j, p):
+    from app.database import db as _db
+    r, ok, step = _partner_step(j, f"Submitted {p['label']} to {p.get('partner', 'the partner')}", "submit_document",
+                                ref=j["partner_ref"], role=p["role"], version_id=p["version_id"])
+    _db.insert("journey_documents", {"journey_id": j["id"], "document_id": p["document_id"], "role": p["role"],
+                                     "version_id": p["version_id"], "attached_at": _db.now_iso()})
+    journal.add_event(j["id"], "document", f"{p['label']} submitted", p.get("summary", ""), stage="act", actor="user")
+    journal.add_event(j["id"], "partner", "Partner accepted the document" if ok or r["normalized"]["raw_code"] != j["state"].get("failure_code")
+                      else "Partner rejected the document again", r["normalized"]["raw_code"] or r["normalized"]["state"],
+                      status="done" if ok else "failed", actor=j["partner_id"], stage="act")
+    return [step], ok
+
+
+def _request_upload(j, p):
+    from app.product import journeys as pj
+    pj.patch_state(j["id"], waiting_for_document=p["doc_type"], waiting_requirement=p["requirement"])
+    journal.add_event(j["id"], "action", "Waiting for your document", p["requirement"], stage="act", status="waiting")
+    return [_step("Saarthi is watching your vault for a matching upload", ok=True,
+                  detail=f"Needed: {p['requirement']} · nothing is submitted without your approval")], True
+
+
+def _retry_partner(j, p):
+    r, ok, step = _partner_step(j, f"Retried with {j['partner_id']} (attempt {p.get('attempt', 1)} of 2)", "retry",
+                                ref=j["partner_ref"])
+    journal.add_event(j["id"], "action", "Automatic retry", step["detail"], stage="act", status="done" if ok else "failed")
+    return [step], ok
+
+
+def _refresh(j, p):
+    r, ok, step = _partner_step(j, "Re-checked status with the partner", "get_journey", ref=j["partner_ref"])
+    journal.add_event(j["id"], "action", "Status re-checked", step["detail"], stage="act")
+    return [step], ok
+
+
+def _new_mandate(j, p):
+    from app.database import db as _db
+    from app.partners import simulators
+    from app.product import journeys as pj
+    steps = []
+    user = _db.query_one("SELECT * FROM users WHERE id=?", (j["user_id"],))
+    r = connectors.call(j["partner_id"], "register_mandate", journey_id=j["id"], account_id=p["account_id"],
+                        max_amount=p["max_amount"], payer_name=user["name"])
+    ok = r["normalized"]["state"] == "SUCCESS"
+    umrn = r["raw"].get("umrn")
+    steps.append(_step(f"New autopay mandate registered · limit {inr(p['max_amount'])}", r, ok, f"UMRN {umrn}"))
+    if not ok:
+        return steps, False
+    mid = j["state"]["mandate_id"]
+    _db.update("mandates", "id", mid, {"umrn": umrn, "max_amount": p["max_amount"], "status": "ACTIVE"})
+    pj.patch_state(j["id"], umrn=umrn)
+    st = simulators._get(j["partner_id"], j["partner_ref"])
+    st["umrn"] = umrn
+    simulators._put(j["partner_id"], j["partner_ref"], st)
+    journal.add_event(j["id"], "action", "New autopay mandate registered", f"UMRN {umrn}", stage="act", actor=j["partner_id"])
+    return steps, _retry(get_journey(j["id"]), steps, "Bank re-presented the SIP debit")
+
+
+def _switch_account(j, p):
+    from app.product import journeys as pj
+    r, ok, step = _partner_step(j, f"Payout account changed to {p['label']}", "update_account", ref=j["partner_ref"],
+                                account_id=p["account_id"])
+    pj.patch_state(j["id"], account_id=p["account_id"])
+    journal.add_event(j["id"], "action", "Account updated on the application", p["label"], stage="act")
+    return [step], ok
+
+
+def _retry_payment(j, p):
+    r, ok, step = _partner_step(j, "Partner collected the payment again", "retry", ref=j["partner_ref"])
+    journal.add_event(j["id"], "action", "Payment retried", step["detail"], stage="act", status="done" if ok else "failed")
+    return [step], ok
+
+
+def _fund_and_retry_payment(j, p):
+    src = db.query_one("SELECT * FROM accounts WHERE id=?", (p["source_account"],))
+    t = connectors.call(src["partner_id"], "transfer", journey_id=j["id"], from_account=p["source_account"],
+                        to_account=p["target_account"], amount=p["amount"])
+    ok = t["normalized"]["state"] == "SUCCESS"
+    steps = [_step(f"Transferred {inr(p['amount'])} from {p['source_label']}", t, ok, f"IMPS UTR {t['raw'].get('utr', '—')}")]
+    if not ok:
+        return steps, False
+    more, ok = _retry_payment(j, p)
+    return steps + more, ok
+
+
 PLANS = {"fund_and_retry": _fund_and_retry, "retry_debit": _retry_debit, "raise_mandate_limit_and_retry": _raise_limit,
          "reduce_sip_to_limit": _reduce_sip, "verify_ownership_via_aa": _verify_ownership,
-         "remind_before_window": _remind}
+         "remind_before_window": _remind, "submit_existing_document": _submit_document,
+         "request_document_upload": _request_upload, "retry_with_partner": _retry_partner, "refresh_status": _refresh,
+         "create_new_mandate": _new_mandate, "switch_partner_account": _switch_account, "retry_payment": _retry_payment,
+         "fund_and_retry_payment": _fund_and_retry_payment}
 
+# Actions whose success the partner must confirm before the journey can resolve.
 VERIFY_STATES = {"fund_and_retry": "SUCCESS", "retry_debit": "SUCCESS", "raise_mandate_limit_and_retry": "SUCCESS",
-                 "reduce_sip_to_limit": "SUCCESS", "verify_ownership_via_aa": "VERIFIED"}
+                 "reduce_sip_to_limit": "SUCCESS", "verify_ownership_via_aa": "VERIFIED",
+                 "submit_existing_document": "SUCCESS", "retry_with_partner": ("SUCCESS", "VERIFIED"),
+                 "refresh_status": ("SUCCESS", "VERIFIED"), "create_new_mandate": "SUCCESS",
+                 "switch_partner_account": "SUCCESS", "retry_payment": "SUCCESS", "fund_and_retry_payment": "SUCCESS"}
 
 
 def execute(action_id: str, approved_by_user: bool = False) -> dict:
@@ -175,7 +276,8 @@ def execute(action_id: str, approved_by_user: bool = False) -> dict:
         v = connectors.call(j["partner_id"], "get_journey", journey_id=j["id"], ref=j["partner_ref"])
         expected = VERIFY_STATES[a["action_type"]]
         got = v["normalized"]["state"]
-        ok = got == expected
+        ok = got in expected if isinstance(expected, tuple) else got == expected
+        expected = " or ".join(expected) if isinstance(expected, tuple) else expected
         verification = {"endpoint": v["endpoint"], "expected": expected, "observed": got, "passed": ok,
                         "partner_raw": v["raw"], "partner_code": v["normalized"]["raw_code"]}
         steps.append(_step("Outcome verified with partner", v, ok, f"Expected {expected}, partner reports {got}"))

@@ -90,6 +90,19 @@ def resume_stale() -> None:
 
 
 def persist(jid: str, diag: dict) -> None:
+    if diag.get("status") == "SELF_RESOLVED":
+        from app.product import applications
+        from app.product import journeys as pj
+        j = context.get_journey(jid)
+        _store(jid, diag)
+        if j["category"] in ("loan", "insurance", "kyc"):
+            snap = connectors.call(j["partner_id"], "get_journey", journey_id=jid, ref=j["partner_ref"])
+            pj.close_incident(jid, "RESOLVED", {"loan": "Disbursed", "insurance": "Policy issued", "kyc": "Verified"}[j["category"]])
+            applications._success_event(j, snap)
+        else:
+            pj.close_incident(jid, "RESOLVED", "Completed by partner")
+        journal.add_event(jid, "saarthi", "Partner completed it on its own", "No action was needed", stage="verify")
+        return
     if diag.get("status") != "DIAGNOSED":
         _store(jid, diag)
         journal.add_event(jid, "saarthi", "Saarthi couldn't map this failure", diag.get("summary", ""),
@@ -112,6 +125,10 @@ def persist(jid: str, diag: dict) -> None:
     act = actions.create(jid, p, option)
     diag["pending_action_id"] = act["id"]
     _store(jid, diag)
+    j = context.get_journey(jid)
+    if j["stage"] in set(WAITING_ACTIONS.values()) | {"Monitoring partner"} and             option["action_type"] not in ("request_document_upload", "remind_before_window", "refresh_status"):
+        from app.product import journeys as pj
+        pj.close_incident(jid, "ATTENTION", "Recovery ready", waiting_for_document=None)
     title = {"TIER_1": "Safe action taken automatically", "TIER_2": "Recovery proposed · your approval needed",
              "TIER_3": "Automation paused · human review recommended"}[p["tier"]]
     journal.add_event(jid, "saarthi", title, option["title"], stage="decide",
@@ -175,33 +192,53 @@ def _health(jid: str, diag: dict | None) -> int:
     return health.compute(ctx, diag, primary if ctx["journey"]["status"] == "ATTENTION" else None)["score"]
 
 
-def _after_action(jid: str, act: dict, before: int) -> None:
+WAITING_ACTIONS = {"remind_before_window": "Waiting for a top-up", "request_document_upload": "Waiting for your document"}
+
+
+def _resolve(j: dict, act: dict) -> None:
+    """The partner confirmed success: apply it to the product and close the incident."""
+    from app.product import applications
     from app.product import journeys as pj
     from app.product import sips as product_sips
+
+    jid, at = j["id"], act["action_type"]
+    ver = (act["result"] or {}).get("verification") or {}
+    if j["category"] == "investment":
+        raw = ver.get("partner_raw") or {}
+        bank_ref = raw.get("bankRefNo") or raw.get("utr")
+        product_sips.complete_installment(j["state"]["sip_id"], bank_ref)
+        n = j["state"].get("installment_no", "")
+        pj.close_incident(jid, "RESOLVED", f"Installment #{n} recovered", bank_ref=bank_ref, last_success_at=db.now_iso())
+        journal.add_event(jid, "partner", "Payment confirmed by the bank", f"{inr(j['amount'])} · Ref {bank_ref}",
+                          actor=j["partner_id"], stage="verify")
+    elif j["category"] == "bank_account":
+        db.update("accounts", "id", j["state"]["account_id"], {"status": "VERIFIED"})
+        pj.close_incident(jid, "RESOLVED", "Account verified")
+        journal.add_event(jid, "partner", "Bank account verified",
+                          "Ownership proven via PAN on bank record" if at == "verify_ownership_via_aa" else "Verification completed",
+                          actor=j["partner_id"], stage="verify")
+    else:  # loan / insurance / kyc
+        snap = connectors.call(j["partner_id"], "get_journey", journey_id=jid, ref=j["partner_ref"])
+        stage = {"loan": "Disbursed", "insurance": "Policy issued", "kyc": "Verified"}[j["category"]]
+        pj.close_incident(jid, "RESOLVED", stage, waiting_for_document=None, last_success_at=db.now_iso())
+        applications._success_event(j, snap)
+        if j["category"] == "kyc":
+            db.update("users", "id", j["user_id"], {"kyc_status": "VERIFIED"})
+
+
+def _after_action(jid: str, act: dict, before: int) -> None:
+    from app.product import journeys as pj
 
     j = context.get_journey(jid)
     diag = stored(jid)
     at = act["action_type"]
 
-    if act["status"] == "COMPLETED" and at == "remind_before_window":
-        pj.close_incident(jid, "ATTENTION", "Waiting for a top-up")
+    if act["status"] == "COMPLETED" and at in WAITING_ACTIONS:
+        pj.close_incident(jid, "ATTENTION", WAITING_ACTIONS[at])
         return
 
     if act["status"] == "COMPLETED":
-        if at in SIP_ACTIONS:
-            raw = act["result"]["verification"]["partner_raw"]
-            bank_ref = raw.get("bankRefNo") or raw.get("utr")
-            product_sips.complete_installment(j["state"]["sip_id"], bank_ref)
-            n = j["state"].get("installment_no", "")
-            pj.close_incident(jid, "RESOLVED", f"Installment #{n} recovered", bank_ref=bank_ref,
-                              last_success_at=db.now_iso())
-            journal.add_event(jid, "partner", "Payment confirmed by the bank", f"{inr(j['amount'])} · Ref {bank_ref}",
-                              actor=j["partner_id"], stage="verify")
-        elif at == "verify_ownership_via_aa":
-            db.update("accounts", "id", j["state"]["account_id"], {"status": "VERIFIED"})
-            pj.close_incident(jid, "RESOLVED", "Account verified")
-            journal.add_event(jid, "partner", "Bank account verified", "Ownership proven via PAN on bank record",
-                              actor=j["partner_id"], stage="verify")
+        _resolve(j, act)
         lesson = learning.record(context.get_journey(jid), diag, at, "SUCCESS")
         after = _health(jid, diag)
         diag["lesson"] = lesson
@@ -222,16 +259,20 @@ def _after_action(jid: str, act: dict, before: int) -> None:
                           status="failed", stage="verify")
         reopen(jid, "Account Aggregator returned a different PAN")
         return
-    if at in SIP_ACTIONS:
-        snap = connectors.call(j["partner_id"], "get_journey", journey_id=jid, ref=j["partner_ref"])
-        code = snap["normalized"]["raw_code"]
-        if code and code != j["state"].get("failure_code"):
-            learning.record(j, diag, at, "SUCCESS")
-            journal.add_event(jid, "saarthi", "First problem fixed, a new one surfaced",
-                              f"{j['state'].get('failure_code')} cleared · bank now reports {code}", stage="verify")
-            pj.open_incident(jid, code, snap["normalized"]["raw_message"] or "", j["partner_id"],
-                             f"Installment #{j['state'].get('installment_no', '')} failed again")
-            return
+    snap = connectors.call(j["partner_id"], "get_journey", journey_id=jid, ref=j["partner_ref"])
+    n = snap["normalized"]
+    if n["state"] == "PENDING" and at == "refresh_status" and n["raw_code"] == j["state"].get("failure_code"):
+        pj.close_incident(jid, "ATTENTION", "Monitoring partner")
+        journal.add_event(jid, "saarthi", "Still pending with the partner", "Saarthi will keep checking", stage="verify",
+                          status="waiting")
+        return
+    if n["raw_code"] and n["raw_code"] != j["state"].get("failure_code"):
+        learning.record(j, diag, at, "SUCCESS")
+        journal.add_event(jid, "saarthi", "First problem fixed, a new one surfaced",
+                          f"{j['state'].get('failure_code')} cleared · partner now reports {n['raw_code']}", stage="verify")
+        pj.open_incident(jid, n["raw_code"], n["raw_message"] or "", j["partner_id"],
+                         "Partner reported another issue")
+        return
     journal.add_event(jid, "saarthi", "Recovery did not complete", "Saarthi is re-checking instead of retrying blindly",
                       status="failed", stage="verify")
     reopen(jid, "Recovery attempt did not verify")
@@ -239,6 +280,16 @@ def _after_action(jid: str, act: dict, before: int) -> None:
 
 # ------------------------------------------------------------------ escalate
 NEXT_ACTION = {
+    "STATEMENT_PERIOD_INSUFFICIENT": ("Help the customer obtain a statement covering the required months.", []),
+    "NAME_MISMATCH": ("Verify the customer's identity on a recorded call before any document is resubmitted.",
+                      ["Do not edit the customer's name or KYC data"]),
+    "DOB_MISMATCH": ("Verify the date of birth against original documents on a recorded call.",
+                     ["Do not edit the date of birth"]),
+    "PAN_MISMATCH": ("Confirm which PAN belongs to the customer before resubmitting.", ["Do not change the PAN on file"]),
+    "PAN_OTHER_PERSON": ("Treat as possible identity misuse: verify the customer in person or on video.",
+                         ["Do not edit identity data", "Do not continue the application"]),
+    "UNKNOWN": ("Ask the partner what this code means and add it to Saarthi's knowledge base.",
+                ["Do not retry or resubmit until the code is understood"]),
     "ACCOUNT_VERIFICATION": ("Confirm with the customer on a recorded call whether the account is held in their name. "
                              "If it belongs to someone else, ask them to link an account in their own name. If it is "
                              "theirs, collect a bank-attested ownership letter and mark the account verified.",

@@ -91,8 +91,8 @@ export function GraphTab({ graph, diag }: { graph: GraphData | null; diag: Diagn
       <div className="divider" style={{ margin: '0 14px' }} />
       <div style={{ padding: '10px 14px 14px' }}>
         <div className="eyebrow">Partner rule (retrieved)</div>
-        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 6 }}>{diag.kb_entry.title}</div>
-        <div className="muted" style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>{diag.kb_entry.body}</div>
+        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 6 }}>{diag.kb_entry?.title ?? 'No partner rule found'}</div>
+        <div className="muted" style={{ fontSize: 12, marginTop: 4, lineHeight: 1.5 }}>{diag.kb_entry?.body ?? 'This code is not in the knowledge base.'}</div>
         {diag.learned && (
           <div className="kv" style={{ marginTop: 10 }}>
             <span className="k">Seen across journeys</span><span className="v num">{diag.learned.occurrences.toLocaleString('en-IN')}</span>

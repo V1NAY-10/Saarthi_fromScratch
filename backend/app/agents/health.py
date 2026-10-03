@@ -47,6 +47,16 @@ def compute(ctx: dict, diag: dict | None = None, decision: dict | None = None) -
             add("unverified", "Bank account not verified", -25, diag["partner"]["raw_code"])
             if diag.get("risk_signal"):
                 add("risk", "Account may not belong to you", -15, "Name/PAN mismatch")
+        elif diag.get("unknown"):
+            add("unknown", "Unrecognised partner error", -35, diag["partner"]["raw_code"])
+        else:
+            an, risk = diag["normalized"].get("analyzer"), diag["normalized"].get("risk_level") or "medium"
+            add("partner_issue", f"Partner: {diag['normalized']['meaning'].lower()}",
+                {"low": -15, "medium": -25, "high": -35}[risk], diag["partner"]["raw_code"])
+            if an == "document_requirement":
+                add("doc_unmet", "Document requirement not met", -10, m.get("required", ""))
+            elif an == "identity_mismatch" and diag.get("risk_signal"):
+                add("identity_risk", "Identity can't be confirmed", -15, "Automatic action blocked")
         if decision and decision.get("tier") in ("TIER_1", "TIER_2"):
             add("recovery", "Safe recovery path available", +20, decision.get("tier_label", ""))
     elif status == "ATTENTION":
@@ -59,6 +69,10 @@ def compute(ctx: dict, diag: dict | None = None, decision: dict | None = None) -
     elif status in ("ON_TRACK", "COMPLETE"):
         add("on_track", "Progressing normally", +25, j["stage"])
 
+    if j["category"] in ("loan", "insurance", "kyc") and status in ("ON_TRACK", "RESOLVED"):
+        add("docs_ok", "All required documents accepted", +10, f"{len(ctx['attached'])} attached")
+    if j["category"] in ("loan", "insurance") and acc and acc["status"] == "VERIFIED":
+        add("payout_ok", "Payout account verified", +5, f"{acc['bank']} {acc['masked']}")
     if ctx["user"]["kyc_status"] == "VERIFIED":
         add("identity", "KYC verified", +10, "PAN registry")
     if acc and acc["status"] == "VERIFIED" and j["category"] == "investment":

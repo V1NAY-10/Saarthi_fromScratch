@@ -12,6 +12,10 @@ export function issueCopy(j: Journey) {
   if (j.status === 'RESOLVED') return { status: 'Resolved by Saarthi', tone: 'var(--ok)', line: 'Recovered and verified with the bank.', cta: 'View' }
   if (j.status === 'ATTENTION' && (!j.saarthi || j.agent_status === 'RUNNING')) return { status: 'Saarthi is investigating', tone: 'var(--brand)', line: 'The agent is checking with the bank right now.', cta: 'Watch' }
   if (j.status === 'ATTENTION' && j.stage === 'Waiting for a top-up') return { status: 'Waiting for a top-up', tone: 'var(--warn)', line: 'Saarthi will re-plan as soon as money arrives.', cta: 'Open' }
+  if (j.status === 'ATTENTION' && j.stage === 'Waiting for your document') return { status: 'Waiting for your document', tone: 'var(--warn)', line: 'Upload it and Saarthi checks it against the partner rule.', cta: 'Upload' }
+  if (j.status === 'ATTENTION' && j.stage === 'Monitoring partner') return { status: 'Waiting on the partner', tone: 'var(--brand)', line: 'Nothing to fix yet. Saarthi is monitoring.', cta: 'View' }
+  const an = j.saarthi?.tier === 'TIER_3' ? 'Needs a human check.' : 'Saarthi found the cause.'
+  if (j.saarthi && !['PAYMENT_FAILURE', 'MANDATE_LIMIT', 'ACCOUNT_VERIFICATION'].includes(ft ?? '')) return { status: j.saarthi.meaning, tone: j.saarthi.tier === 'TIER_3' ? 'var(--warn)' : 'var(--bad)', line: an, cta: j.saarthi.tier === 'TIER_3' ? 'Review' : 'Fix with Saarthi' }
   if (ft === 'PAYMENT_FAILURE') return { status: 'Payment unsuccessful', tone: 'var(--bad)', line: 'Saarthi found the reason.', cta: 'Understand & fix' }
   if (ft === 'MANDATE_LIMIT') return { status: 'Above autopay limit', tone: 'var(--bad)', line: 'Saarthi found the reason.', cta: 'Understand & fix' }
   if (ft === 'ACCOUNT_VERIFICATION') return { status: 'Account not verified', tone: 'var(--bad)', line: j.saarthi?.tier === 'TIER_3' ? 'Needs a human check.' : 'Saarthi can prove ownership.', cta: 'Resolve' }

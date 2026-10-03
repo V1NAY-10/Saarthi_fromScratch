@@ -6,10 +6,12 @@ deterministic safety engine and submits a plan. Every step is written to the
 run's trace as it happens, so the UI can show the agent working live.
 
 Two planners drive the same tools:
-  * Claude (claude-opus-5-5, manual tool-use loop) when an API key is configured
-    and DEMO_MODE is off. Claude decides which tools to call and which plan to
-    submit, and writes the customer explanation.
-  * A deterministic planner otherwise, or if Claude fails mid-run. It calls the
+  * Gemini (gemini-2.5-flash, manual tool-use loop) when GEMINI_API_KEY is
+    configured and DEMO_MODE is false. Gemini decides which tools to call and
+    which plan to submit, and writes the customer explanation. It handles ALL
+    failure types: payment failures, mandate issues, name/doc/identity mismatches,
+    transient errors, monitoring states, and unknown codes.
+  * A deterministic planner otherwise, or if Gemini fails mid-run. It calls the
     tools in a fixed investigative order and picks the analyzer's recommendation.
 
 Either way the agent can only *propose*: tiers come from decision.py, and
@@ -46,7 +48,10 @@ TOOLS = [
                       "required": ["partner_code", "rationale"]}},
     {"name": "collect_evidence",
      "description": "Run evidence collectors against the system of record. Valid keys: mandate_account_balance, "
-                    "installment_amount, mandate_status, mandate_limit, pan_name, bank_record_name, name_similarity.",
+                    "installment_amount, mandate_status, mandate_limit, pan_name, bank_record_name, name_similarity, "
+                    "document_requirement, attached_document, vault_candidates, kyc_identity, submitted_identity, "
+                    "partner_status, retry_history, time_with_partner, paying_account_balance, payment_amount, "
+                    "paying_account, verified_accounts. The knowledge entry's evidence_required says which apply.",
      "input_schema": {"type": "object", "properties": {"keys": {"type": "array", "items": {"type": "string"}},
                                                        "rationale": {"type": "string"}},
                       "required": ["keys", "rationale"]}},
@@ -58,9 +63,13 @@ TOOLS = [
      "input_schema": {"type": "object", "properties": {"name_a": {"type": "string"}, "name_b": {"type": "string"},
                                                        "rationale": {"type": "string"}},
                       "required": ["name_a", "name_b", "rationale"]}},
-    {"name": "search_policies",
-     "description": "BM25 search over Saarthi's policies and requirements (money movement, retries, name match, "
-                    "third-party payments, Account Aggregator consent, escalation).",
+    {"name": "check_document_vault",
+     "description": "Check the customer's Document Vault against the partner's document rule: which documents could "
+                    "satisfy it, and why each does or doesn't. Use for document and identity failures.",
+     "input_schema": {"type": "object", "properties": {"rationale": {"type": "string"}}, "required": ["rationale"]}},
+    {"name": "search_knowledge",
+     "description": "Semantic retrieval (RAG) over Saarthi's Markdown knowledge base: partner rules, document "
+                    "requirements, resolution procedures, retry and escalation policies. Returns only relevant sections.",
      "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "rationale": {"type": "string"}},
                       "required": ["query", "rationale"]}},
     {"name": "build_recovery_options",
@@ -138,7 +147,12 @@ class AgentRun:
         code = args.get("partner_code") or self.mem["perceived"]["snap"]["normalized"]["raw_code"]
         kb = diagnosis.knowledge(j["partner_id"], code)
         if not kb:
-            raise _ToolError(f"No knowledge entry for {j['partner_id']}:{code}.")
+            # Unknown code: prepare a human-review diagnosis. Never invent a meaning.
+            self.mem["unknown"] = code
+            self.mem["diag"] = diagnosis.unmapped(self.mem["ctx"], self.mem["perceived"])
+            raise _ToolError(f"No knowledge entry for {j['partner_id']}:{code}. Do not guess its meaning. Search the "
+                             "knowledge base; if nothing reliably describes this exact code, submit the escalation "
+                             "option (opt-escalate_to_specialist).")
         self.mem["kb"] = kb
         k = kb["data"]
         stats = diagnosis.learned_stats(j["partner_id"], code)
@@ -154,7 +168,7 @@ class AgentRun:
         keys = [k for k in args.get("keys", []) if k in evidence.COLLECTORS]
         if not keys:
             raise _ToolError(f"Unknown evidence keys. Valid: {', '.join(evidence.COLLECTORS)}")
-        self.mem["ctx"] = self._ctx()
+        self.mem["ctx"] = self._with_kb(self._ctx())
         p = self.mem["perceived"]
         got = evidence.collect(keys, self.mem["ctx"], p["snap"]["raw"], p["pdiag"]["raw"])
         have = {e["key"]: e for e in self.mem.get("evidence", [])}
@@ -173,13 +187,52 @@ class AgentRun:
         return m, f"'{args.get('name_a')}' vs '{args.get('name_b')}' → {m['score']:.2f} {m['verdict']}" + \
             (f" ({'; '.join(m['reasons'])})" if m["reasons"] else "")
 
-    def t_search_policies(self, args):
-        hits = retrieval.retrieve_for(args.get("query", ""))
+    def _with_kb(self, ctx):
+        ctx["kb_entry"] = (self.mem.get("kb") or {}).get("data")
+        return ctx
+
+    def t_search_knowledge(self, args):
+        q = args.get("query", "")
+        pid = (self.mem.get("ctx") or self._ctx())["journey"]["partner_id"]
+        hits = retrieval.retrieve_for(q, k=4, partner_id=pid)
         self.mem.setdefault("knowledge", {})
         for h in hits:
             self.mem["knowledge"][h["id"]] = h
-        return [{"id": h["id"], "title": h["title"], "body": h["body"], "score": h["score"]} for h in hits], \
-            " · ".join(h["title"] for h in hits) or "No matching policy"
+            db.insert("knowledge_refs", {"journey_id": self.jid, "run_id": self.run_id, "chunk_id": h["id"],
+                                         "engine": h["engine"], "score": h["score"], "ts": db.now_iso()})
+        if self.mem.get("unknown"):
+            code = self.mem["unknown"]
+            reliable = [h for h in hits if h.get("code") == code or code in (h.get("body") or "")]
+            self.mem["diag"]["knowledge"] = hits
+            note = (f"Found knowledge describing {code}." if reliable else
+                    f"Nothing retrieved describes {code}; the closest sections are about other codes, so they can't be "
+                    "relied on.")
+            return {"hits": hits, "reliable_match": bool(reliable), "note": note}, \
+                f"{len(hits)} section(s) via {hits[0]['engine'] if hits else 'retrieval'} · " + \
+                ("reliable match" if reliable else f"none describe {code}")
+        engine = hits[0]["engine"] if hits else "retrieval"
+        return [{"id": h["id"], "title": h["title"], "body": h["body"], "score": h["score"], "source": h["source"]}
+                for h in hits], f"{len(hits)} section(s) via {engine}: " + (" · ".join(h["title"] for h in hits) or "none")
+
+    t_search_policies = t_search_knowledge  # older tool name
+
+    def t_check_document_vault(self, args):
+        if "kb" not in self.mem:
+            raise _ToolError("Look up the failure knowledge first.")
+        ctx = self._with_kb(self._ctx())
+        p = self.mem["perceived"]
+        ftype = self.mem["kb"]["data"]["analyzer"]
+        if ftype == "identity_mismatch":
+            from app.services import docintel
+            docs = [d for d in ctx["vault"] if d["doc_type"] in docintel.IDENTITY_TYPES]
+            out = [{"name": d["name"], "version": d["version"], "status": d["status"],
+                    "summary": docintel.summary(d["doc_type"], d["fields"])} for d in docs]
+            return out, f"{len(out)} identity document(s): " + (" · ".join(f"{o['name']} v{o['version']} ({o['status'].lower()})" for o in out) or "none")
+        e = evidence.collect(["vault_candidates", "attached_document"], ctx, p["snap"]["raw"], p["pdiag"]["raw"])
+        cands = e[0]["value"] or []
+        lines = [f"{c['name']} v{c['version']} ({c['summary']}): " + ("satisfies the rule" + (" (already submitted)" if c["already_submitted"] else "")
+                 if c["ok"] else "; ".join(c["issues"])) for c in cands]
+        return {"submitted": e[1]["display"], "candidates": cands}, " · ".join(lines) or "No matching documents in the vault"
 
     def t_build_recovery_options(self, args):
         if "kb" not in self.mem:
@@ -190,8 +243,8 @@ class AgentRun:
         if missing:  # the knowledge entry is the contract - fetch what it demands
             self.t_collect_evidence({"keys": missing})
         ev = [e for e in self.mem["evidence"] if e["key"] in k["evidence_required"]]
-        self.mem["ctx"] = self._ctx()
-        analysis = diagnosis.analyze(k["failure_type"], self.mem["ctx"], ev, self.mem["perceived"]["pdiag"]["raw"])
+        self.mem["ctx"] = self._with_kb(self._ctx())
+        analysis = diagnosis.analyze(k, self.mem["ctx"], ev, self.mem["perceived"]["pdiag"]["raw"])
         self.mem["analysis"] = analysis
         self.mem["diag"] = diagnosis.assemble(self.mem["ctx"], self.mem["perceived"], self.mem["kb"], ev, analysis,
                                               list(self.mem.get("knowledge", {}).values()))
@@ -255,28 +308,48 @@ class AgentRun:
         if "perceived" not in self.mem:
             self.call_tool("query_partner_status",
                            {"rationale": "Get the bank's own view instead of trusting our cached status."})
-        if "kb" not in self.mem:
-            _, _, ok = self.call_tool("lookup_failure_knowledge",
-                                      {"partner_code": self.mem["perceived"]["snap"]["normalized"]["raw_code"],
-                                       "rationale": "Translate the bank's code into a standard failure."})
-            if not ok:
-                return
+        if self.mem["perceived"]["snap"]["normalized"]["state"] in ("SUCCESS", "VERIFIED"):
+            self.thought("The partner now reports success: the problem cleared on the partner's side before I acted. "
+                         "Nothing to fix; I'll record it.")
+            self.mem["self_resolved"] = True
+            return
+        if "kb" not in self.mem and not self.mem.get("unknown"):
+            self.call_tool("lookup_failure_knowledge",
+                           {"partner_code": self.mem["perceived"]["snap"]["normalized"]["raw_code"],
+                            "rationale": "Translate the partner's code into a standard failure."})
+        if self.mem.get("unknown"):
+            code = self.mem["unknown"]
+            self.thought(f"{code} isn't in my knowledge base. I'll search for anything that describes it before deciding.")
+            _, summary, _ = self.call_tool("search_knowledge", {"query": f"{code} {ctx['partner']['name']} error",
+                                                                "rationale": "Look for reliable knowledge about this exact code."})
+            self.thought("Nothing I retrieved describes this exact code, so I won't guess a fix. A specialist should "
+                         "review it with the partner.")
+            self.call_tool("evaluate_option", {"option_id": "opt-escalate_to_specialist",
+                                               "rationale": "Confirm the safe path with the safety engine."})
+            d = self.mem["diag"]
+            self.call_tool("submit_plan", {"option_id": "opt-escalate_to_specialist", "headline": d["headline"],
+                                           "summary": d["summary"], "safety_note": d["safety_note"],
+                                           "rationale": "Unknown codes are never acted on."})
+            return
         k = self.mem["kb"]["data"]
         if not self.mem.get("evidence"):
             self.call_tool("collect_evidence", {"keys": k["evidence_required"],
                                                 "rationale": "Collect exactly the evidence this failure requires."})
-        ft = k["failure_type"]
-        if ft in ("PAYMENT_FAILURE", "MANDATE_LIMIT"):
+        an = k["analyzer"]
+        if an in ("insufficient_funds", "mandate_limit", "debit_inference", "payment_retry", "account_unverified"):
             self.call_tool("list_customer_accounts",
                            {"rationale": "See whether another of the customer's own accounts could help."})
-        else:
+        elif an == "name_mismatch":
             ev = {e["key"]: e for e in self.mem["evidence"]}
             self.call_tool("compare_names", {"name_a": ev["bank_record_name"]["value"] or "",
                                              "name_b": ev["pan_name"]["value"],
                                              "rationale": "Decide whether this is formatting or a different person."})
-        self.call_tool("search_policies", {"query": f"{k['meaning']} {k['root_cause']} "
-                                                    f"{' '.join(a.replace('_', ' ') for a in k['recovery_actions'])}",
-                                           "rationale": "Check which policies constrain the fix."})
+        elif an in ("document_requirement", "identity_mismatch"):
+            self.call_tool("check_document_vault",
+                           {"rationale": "Before asking for an upload, check whether a vault document already satisfies the rule."})
+        self.call_tool("search_knowledge", {"query": f"{k['error_code']} {k['customer_meaning']} {k['root_cause']} "
+                                                     f"{' '.join(a.replace('_', ' ') for a in k['resolution_options'])}",
+                                            "rationale": "Retrieve the partner rule and policies that constrain the fix."})
         self.call_tool("build_recovery_options", {"rationale": "Compute concrete options from live balances and limits."})
         for o in self.mem["diag"]["options"]:
             self.call_tool("evaluate_option", {"option_id": o["id"],
@@ -292,62 +365,70 @@ class AgentRun:
                                        "safety_note": a["safety_note"], "rationale": "Least risky option that resolves it."})
 
     def run_llm(self):
-        from app.agents.llm import agent_client
+        """RAG-first Gemini tool-use loop. Knowledge is retrieved before the model reasons,
+        and every tool result comes from the backend; tiers come only from the safety engine.
+        Handles all failure types: payment, mandate, name mismatch, document, identity,
+        transient, monitor, human-only, and unknown codes."""
+        from app.agents import llm
 
-        client = agent_client()
-        j = self._ctx()["journey"]
-        messages = [{"role": "user", "content":
-                     f"Journey {j['id']} ('{j['title']}', partner ref {j['partner_ref']}) was just rejected by the "
-                     f"partner with code {j['state'].get('failure_code')}. Investigate and submit a recovery plan."}]
+        ctx = self._ctx()
+        self.mem["ctx"] = ctx
+        j = ctx["journey"]
+        code = j["state"].get("failure_code")
+        self.thought(f"{ctx['partner']['name']} returned {code}. First I'll retrieve what the knowledge base says about it.")
+        rag, _, _ = self.call_tool("search_knowledge", {
+            "query": f"{code} {ctx['partner']['name']} {j['category']} {j['title']}",
+            "rationale": "Ground the investigation in the partner's published rules before reasoning."})
+        hits = rag.get("hits", rag) if isinstance(rag, dict) else rag
+        grounding = "\n".join(f"- [{h.get('source', '')}] {h['title']}: {h['body'][:400]}" for h in (hits or [])[:4]) \
+            or "- (nothing retrieved)"
+        loop = llm.tool_loop(prompts.AGENT_SYSTEM, TOOLS)
+        texts, calls = loop.send(user_text=(
+            f"Journey {j['id']} ('{j['title']}', partner ref {j['partner_ref']}) was just rejected or held by "
+            f"{ctx['partner']['name']} with code {code}.\n\nRetrieved knowledge (RAG over Saarthi's knowledge base, "
+            f"most relevant first):\n{grounding}\n\nInvestigate with the tools and submit a recovery plan. If none "
+            "of the retrieved knowledge describes this exact code, do not guess."))
         nudged = False
         for _ in range(MAX_TURNS):
-            resp = client.beta.messages.create(
-                model=config.SAARTHI_MODEL, max_tokens=16000, system=prompts.AGENT_SYSTEM, tools=TOOLS,
-                messages=messages, output_config={"effort": "medium"},
-                betas=["server-side-fallback-2026-07-01"], fallbacks="default",
-            )
-            if resp.stop_reason == "refusal":
-                raise RuntimeError("Claude declined the request")
-            messages.append({"role": "assistant", "content": resp.content})
-            for b in resp.content:
-                if b.type == "text" and b.text.strip():
-                    self.thought(b.text.strip())
-            uses = [b for b in resp.content if b.type == "tool_use"]
-            if not uses:
-                if self.mem.get("submitted") or nudged or resp.stop_reason == "max_tokens":
+            for t in texts:
+                self.thought(t.strip())
+            if not calls:
+                if self.mem.get("submitted") or nudged:
                     break
                 nudged = True
-                messages.append({"role": "user", "content": "Please finish by calling submit_plan."})
+                texts, calls = loop.send(user_text="Please finish by calling submit_plan.")
                 continue
             results = []
-            for u in uses:
-                out, _, ok = self.call_tool(u.name, dict(u.input or {}))
-                results.append({"type": "tool_result", "tool_use_id": u.id,
-                                "content": json.dumps(out, ensure_ascii=False, default=str)[:8000],
-                                **({} if ok else {"is_error": True})})
-            messages.append({"role": "user", "content": results})
+            for c in calls:
+                out, _, ok = self.call_tool(c["name"], c["args"])
+                results.append({"id": c["id"], "name": c["name"], "output": out, "error": not ok})
             if self.mem.get("submitted"):
                 break
+            texts, calls = loop.send(results=results)
 
     # ------------------------------------------------------------------ finish
     def finalize(self) -> dict:
         """Fill any gap the planner left (so the result is always complete), then
         build the diagnosis record with every option classified."""
-        if "diag" not in self.mem:
+        if "diag" not in self.mem and not self.mem.get("self_resolved"):
             self.thought("Completing the investigation steps that weren't run.")
             self.run_deterministic()
-        if "diag" not in self.mem:  # code not in the knowledge base
+        if self.mem.get("self_resolved"):
+            return {"journey_id": self.jid, "status": "SELF_RESOLVED", "partner": self.mem["perceived"]["snap"]["normalized"],
+                    "agent": {"run_id": self.run_id, "mode": self.mode, "chosen_by": "planner"}}
+        if "diag" not in self.mem:  # partner unreachable or code unknown without a diagnosis
             ctx = self.mem.get("ctx") or self._ctx()
             perceived = self.mem.get("perceived") or diagnosis.perceive(ctx)
-            return diagnosis.unmapped(ctx, perceived)
+            self.mem["diag"] = diagnosis.unmapped(ctx, perceived)
         diag = self.mem["diag"]
         ctx = self._ctx()
-        diag["knowledge"] = list(self.mem.get("knowledge", {}).values()) or \
-            retrieval.retrieve_for(f"{diag['kb_entry']['title']} {diag['normalized']['meaning']}")
+        if not diag.get("unknown"):
+            diag["knowledge"] = list(self.mem.get("knowledge", {}).values()) or \
+                retrieval.retrieve_for(f"{diag['kb_entry']['title']} {diag['normalized']['meaning']}")
         diag["decisions"] = decision.decide_all(diag, ctx, self.mem.get("chosen"))
         diag["explanation"] = self._explanation(ctx, diag)
-        diag["agent"] = {"run_id": self.run_id, "mode": self.mode,
-                         "chosen_by": "claude" if self.mode == "llm" and self.mem.get("chosen") else "planner"}
+        diag["agent"] = {"run_id": self.run_id, "mode": self.mode, "provider": config.LLM_PROVIDER,
+                         "chosen_by": config.LLM_PROVIDER if self.mode == "llm" and self.mem.get("chosen") else "planner"}
         return diag
 
     def _explanation(self, ctx, diag) -> dict:
@@ -387,9 +468,9 @@ def execute(journey_id: str, run_id: str) -> tuple[dict, "AgentRun"]:
         try:
             run.run_llm()
         except Exception as e:  # never let the LLM break a financial flow
-            log.warning("Agent LLM run failed (%r) - continuing with deterministic planner", e, exc_info=True)
+            log.warning("Agent Gemini run failed (%r) - continuing with deterministic planner", e, exc_info=True)
             run.mode = "llm+fallback"
-            run.thought("Claude was unavailable, so I'm continuing with Saarthi's deterministic planner.")
-    if not run.mem.get("submitted"):
+            run.thought("Gemini was unavailable, so I'm continuing with Saarthi's deterministic planner.")
+    if not run.mem.get("submitted") and not run.mem.get("self_resolved"):
         run.run_deterministic()
     return run.finalize(), run

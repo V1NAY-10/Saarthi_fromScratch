@@ -2,13 +2,16 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { api, setApiUser } from '../services/api'
 import type { Overview } from '../services/types'
 
-export type Tab = 'home' | 'invest' | 'saarthi' | 'banks' | 'profile'
+export type Tab = 'home' | 'invest' | 'saarthi' | 'loans'
 export type Route =
   | { name: 'journey'; id: string; autoApprove?: boolean }
   | { name: 'journeys' }
   | { name: 'knowledge' }
   | { name: 'fund'; id: string }
   | { name: 'linkBank' }
+  | { name: 'apply'; kind: string; partnerId?: string }
+  | { name: 'banks' }
+  | { name: 'profile' }
 
 interface ChatState { open: boolean; journeyId?: string; preset?: string }
 

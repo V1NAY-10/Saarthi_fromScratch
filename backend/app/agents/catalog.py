@@ -38,4 +38,44 @@ ACTIONS = {
         "moves_money": False, "shares_data": False, "reversible": True, "changes_identity": False,
         "changes_terms": False,
     },
+    "submit_existing_document": {
+        "label": "Submit a matching document from your vault",
+        "moves_money": False, "shares_data": True, "reversible": True, "changes_identity": False,
+        "changes_terms": False,
+    },
+    "request_document_upload": {
+        "label": "Ask you for a document that meets the rule",
+        "moves_money": False, "shares_data": False, "reversible": True, "changes_identity": False,
+        "changes_terms": False, "needs_customer": True,
+    },
+    "retry_with_partner": {
+        "label": "Retry the same request with the partner",
+        "moves_money": False, "shares_data": False, "reversible": True, "changes_identity": False,
+        "changes_terms": False, "partner_call": True,
+    },
+    "refresh_status": {
+        "label": "Re-check status with the partner",
+        "moves_money": False, "shares_data": False, "reversible": True, "changes_identity": False,
+        "changes_terms": False, "partner_call": True,
+    },
+    "create_new_mandate": {
+        "label": "Register a new autopay mandate & retry",
+        "moves_money": True, "shares_data": False, "reversible": True, "changes_identity": False,
+        "changes_terms": True,
+    },
+    "switch_partner_account": {
+        "label": "Use a different verified account",
+        "moves_money": False, "shares_data": True, "reversible": True, "changes_identity": False,
+        "changes_terms": True,
+    },
+    "retry_payment": {
+        "label": "Retry the payment",
+        "moves_money": True, "shares_data": False, "reversible": True, "changes_identity": False,
+        "changes_terms": False,
+    },
+    "fund_and_retry_payment": {
+        "label": "Top up from your own account & pay",
+        "moves_money": True, "shares_data": False, "reversible": True, "changes_identity": False,
+        "changes_terms": False,
+    },
 }

@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion'
 import { Cpu, FlaskConical, LogOut, Minus, Plus, RotateCcw, Sparkles } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { DemoScenarios } from '../components/DemoScenarios'
 import { BankLogo, SaarthiMark } from '../components/ui'
 import { AgentBadge, AgentTrace } from '../features/journey/AgentTrace'
 import { useApp } from '../hooks/useApp'
@@ -70,8 +71,10 @@ export function EnginePanel() {
         <div className="row" style={{ gap: 6, marginTop: 12, flexWrap: 'wrap' }}>
           <span className="pill pill-info"><Cpu size={11} /> Deterministic safety engine</span>
           {sys && (sys.llm_enabled
-            ? <span className="pill pill-ok"><Sparkles size={11} /> Claude agent · {sys.model}</span>
+            ? <span className="pill pill-ok"><Sparkles size={11} /> Gemini agent · {sys.model}</span>
             : <span className="pill pill-neutral">Agent: deterministic planner (no API key)</span>)}
+          {sys?.knowledge && <span className={`pill ${sys.knowledge.active_engine === 'cognee' ? 'pill-ok' : 'pill-warn'}`} title={sys.knowledge.reason}>
+            RAG: {sys.knowledge.active_engine === 'cognee' ? 'Cognee' : 'BM25 fallback'} · {sys.knowledge.sections} sections</span>}
         </div>
       </div>
 
@@ -127,6 +130,7 @@ export function EnginePanel() {
           )}
         </div>
 
+        {!run && <div className="eng-card" style={{ maxHeight: 300, overflowY: 'auto' }}><DemoScenarios compact /></div>}
         <div className="eng-card">
           <div className="between">
             <div className="sandbox-tag"><FlaskConical size={12} /> Sandbox · bank-side balances</div>

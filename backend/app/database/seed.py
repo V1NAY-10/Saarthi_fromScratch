@@ -4,7 +4,7 @@ There is no demo user, no pre-made journey and no pre-broken state. Everything
 a user sees is created by what they do in the app (register, link accounts,
 start SIPs) and by how the sandbox partners respond to it."""
 from app.database import db
-from app.knowledge.entries import FAILURE_CODES, POLICIES
+from app.knowledge import registry
 
 PARTNERS = [
     ("axis", "Axis Bank", "bank", "NPCI NACH dialect"),
@@ -41,12 +41,20 @@ def seed() -> None:
     db.init_schema(drop=True)
     for p in PARTNERS:
         db.insert("partners", {"id": p[0], "name": p[1], "kind": p[2], "api_style": p[3]})
+    for pid, prof in registry.load()["profiles"].items():
+        db.insert("partners", {"id": pid, "name": prof["partner_name"], "kind": prof["journey_type"],
+                               "api_style": f"{prof['dialect']} dialect"})
     for f in FUNDS:
         db.insert("funds", dict(zip(["id", "name", "amc", "category", "risk", "nav", "returns_1y", "returns_3y",
                                      "returns_5y", "min_sip", "expense_ratio", "aum_cr"], f)))
-    for k in FAILURE_CODES:
-        db.insert("knowledge_entries", {"id": k["id"], "kind": "failure_code", "partner_id": k["partner_id"],
-                                        "code": k["code"], "title": k["title"], "body": k["body"], "data": k["data"]})
-    for p in POLICIES:
-        db.insert("knowledge_entries", {"id": p["id"], "kind": p["kind"], "partner_id": None, "code": None,
-                                        "title": p["title"], "body": p["body"], "data": {}})
+    load_knowledge()
+
+
+def load_knowledge() -> None:
+    """Mirror the Markdown knowledge base into the knowledge_entries table (for the UI)."""
+    db.execute("DELETE FROM knowledge_entries")
+    kb = registry.reload()
+    for c in kb["chunks"]:
+        data = kb["codes"].get((c["partner_id"], c["code"])) if c["kind"] == "failure_code" else c["data"]
+        db.insert("knowledge_entries", {"id": c["id"], "kind": c["kind"], "partner_id": c["partner_id"],
+                                        "code": c["code"], "title": c["title"], "body": c["text"], "data": data or {}})

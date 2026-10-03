@@ -249,7 +249,16 @@ PARTNERS = {"axis": SandboxBank("axis", "nach"), "icici": SandboxBank("icici", "
             "aa": AccountAggregator(), "nsdl": PanRegistry()}
 
 
+def _register_application_partners() -> None:
+    from app.knowledge import registry
+    from app.partners.applications import ApplicationPartner
+    for pid in registry.load()["profiles"]:
+        PARTNERS.setdefault(pid, ApplicationPartner(pid))
+
+
 def get(pid: str):
+    if pid not in PARTNERS:
+        _register_application_partners()
     if pid not in PARTNERS:
         raise PartnerError(f"No connector for partner {pid}")
     return PARTNERS[pid]

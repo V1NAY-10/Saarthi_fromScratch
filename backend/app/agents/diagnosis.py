@@ -206,12 +206,278 @@ def _analyze_name(ctx, ev, pdiag):
     }
 
 
-ANALYZERS = {"PAYMENT_FAILURE": _analyze_payment, "MANDATE_LIMIT": _analyze_mandate_limit,
-             "ACCOUNT_VERIFICATION": _analyze_name}
+def _by(ev):
+    return {e["key"]: e for e in ev}
 
 
-def analyze(failure_type: str, ctx: dict, ev: list[dict], pdiag: dict) -> dict:
-    return ANALYZERS[failure_type](ctx, ev, pdiag)
+def _escalate_option(desc="A specialist reviews the case with you. Saarthi sends everything it checked."):
+    return _option("escalate_to_specialist", "Hand over to a specialist", desc)
+
+
+def _analyze_document(ctx, ev, pdiag, k):
+    """Any document rule: period, recency, readability, type, presence, income, salary credits."""
+    from app.services import doccheck, docintel
+    by = _by(ev)
+    req = by["document_requirement"]["value"]
+    dt, rule, chk = req["doc_type"], req["rule"], req["check"]
+    att = by["attached_document"]["value"]
+    cands = by["vault_candidates"]["value"] or []
+    label = docintel.TYPE_LABEL.get(dt, "identity document").lower() if dt != "IDENTITY" else "identity document"
+    partner = ctx["partner"]["name"]
+    if not chk and att:  # partner didn't say which check: evaluate ourselves
+        issues = doccheck.evaluate(dt, rule, att, ctx["user"], ctx.get("application"))
+        chk = {"required": issues[0]["required"], "found": issues[0]["found"]} if issues else {}
+    required, found = chk.get("required") or doccheck.describe(dt, rule), chk.get("found") or "—"
+    usable = [c for c in cands if c["ok"] and not c["already_submitted"]]
+    risky = k["failure_type"] in ("STATEMENT_REJECTED",) and att and (att.get("checks") or {}).get("name_verdict") == "different"
+    facts = [
+        {"label": "Partner requires", "value": required, "source": f"{partner} rule · knowledge base"},
+        {"label": "Your document", "value": found,
+         "source": f"{att['name']} v{att['version']} · document intelligence" if att else "Application"},
+        {"label": "Result", "value": k["customer_meaning"], "source": "Computed by Saarthi", "emphasis": True},
+    ]
+    options = []
+    allowed = set(k["resolution_options"])
+    if usable and not risky and "submit_existing_document" in allowed:
+        u = usable[0]
+        options.append(_option("submit_existing_document", f"Submit {u['name']} v{u['version']} from your vault",
+                               f"{u['summary']}. It satisfies {partner}'s rule ({required}). Saarthi submits this exact "
+                               "version to the partner and checks the result.",
+                               {"role": chk.get("role") or doccheck.role_for(dt), "document_id": u["document_id"],
+                                "version_id": u["version_id"], "label": f"{u['name']} v{u['version']}",
+                                "summary": u["summary"], "doc_type": dt, "partner": partner}))
+    if not risky and "request_document_upload" in allowed:
+        options.append(_option("request_document_upload", f"Upload a {label} that meets the rule",
+                               f"Saarthi waits for you to add a {label} ({required}) to your vault, checks it against "
+                               f"{partner}'s rule, then asks before submitting it.",
+                               {"doc_type": dt, "role": chk.get("role") or doccheck.role_for(dt), "requirement": required}))
+    options.append(_escalate_option())
+    kinds = [o["action_type"] for o in options]
+    rec = next(t for t in ("submit_existing_document", "request_document_upload", "escalate_to_specialist") if t in kinds)
+    vault_line = (f" I found {usable[0]['summary']} in your vault, which satisfies the rule." if rec == "submit_existing_document"
+                  else " None of the documents in your vault satisfy it yet." if rec == "request_document_upload" else
+                  " The name on the document belongs to someone else, so I won't resubmit anything automatically." if risky
+                  else " Saarthi won't change what you declared, so a specialist should confirm the details with you.")
+    return {
+        "confirmed": bool(chk) and not risky and rec != "escalate_to_specialist", "risk_signal": bool(risky), "facts": facts,
+        "options": _recommend(options, rec),
+        "metrics": {"doc_type": dt, "required": required, "found": found, "usable": len(usable)},
+        "document_evidence": {"doc_type": dt, "doc_label": docintel.TYPE_LABEL.get(dt, "Identity document"),
+                              "required": required, "found": found, "rule": chk.get("rule"),
+                              "submitted": {"name": att["name"], "version": att["version"],
+                                            "summary": docintel.summary(att["doc_type"], att["fields"])} if att else None,
+                              "candidates": cands},
+        "missing": [] if usable else [f"{docintel.TYPE_LABEL.get(dt, 'Identity document')} that meets: {required}"],
+        "headline": k["customer_meaning"],
+        "summary": f"{partner} couldn't accept your {label}: it requires {required}, but the one submitted has {found}." + vault_line,
+        "safety_note": "Your application is on hold, not rejected. Nothing is sent to the partner without your approval.",
+    }
+
+
+def _analyze_identity(ctx, ev, pdiag, k):
+    from app.services import doccheck, docintel
+    by = _by(ev)
+    sub = by["submitted_identity"]["value"] or {}
+    kyc = by["kyc_identity"]["value"]
+    f, c = sub.get("fields", {}), sub.get("checks", {})
+    score = c.get("name_match")
+    severe = c.get("pan_match") is False or (score is not None and score < 0.5)
+    rule = {"name_match": True, "dob_match": True}
+    cands = []
+    for d in ctx["vault"]:
+        if d["doc_type"] not in docintel.IDENTITY_TYPES or d["version_id"] == sub.get("version_id"):
+            continue
+        issues = doccheck.evaluate("IDENTITY", rule, d, ctx["user"])
+        cands.append({**{x: d[x] for x in ("document_id", "version_id", "version", "name")},
+                      "summary": docintel.summary(d["doc_type"], d["fields"]), "ok": not issues})
+    cands.sort(key=lambda x: x["name"].endswith("(registry record)"))
+    usable = [x for x in cands if x["ok"]]
+    facts = [{"label": "KYC record", "value": f"{kyc['name']} · DOB {kyc['dob']}", "source": "PAN registry (KYC)"},
+             {"label": "On the document", "value": f"{f.get('name', '—')} · DOB {f.get('dob', '—')}",
+              "source": f"{sub.get('doc', 'Submitted document')} · document intelligence"},
+             {"label": "Mismatch", "value": k["customer_meaning"], "source": "Computed by Saarthi", "emphasis": True}]
+    options = []
+    if usable and not severe:
+        u = usable[0]
+        options.append(_option("submit_existing_document", f"Submit {u['name']} v{u['version']} instead",
+                               f"{u['summary']} matches your KYC record. Saarthi never edits identity data; it only "
+                               "submits a document that already matches.",
+                               {"role": sub.get("role", "identity"), "document_id": u["document_id"],
+                                "version_id": u["version_id"], "label": f"{u['name']} v{u['version']}",
+                                "summary": u["summary"], "doc_type": "IDENTITY", "partner": ctx["partner"]["name"]}))
+    options.append(_escalate_option("A verification specialist confirms your identity. Saarthi never edits a name, "
+                                    "date of birth or PAN."))
+    return {
+        "confirmed": not severe and bool(usable), "risk_signal": severe, "facts": facts,
+        "options": _recommend(options, "submit_existing_document" if usable and not severe else "escalate_to_specialist"),
+        "metrics": {"name_score": score, "dob_match": c.get("dob_match"), "pan_match": c.get("pan_match")},
+        "missing": [] if usable else ["An identity document that matches your KYC record"],
+        "headline": "High-risk identity mismatch" if severe else k["customer_meaning"],
+        "summary": ("The identity on the submitted document doesn't belong to you, so automatic action is blocked."
+                    if severe else f"The submitted document shows {f.get('name', '—')} / {f.get('dob', '—')}, but your "
+                    f"KYC record is {kyc['name']} / {kyc['dob']}."
+                    + (f" I found {usable[0]['summary']} in your vault that matches." if usable else
+                       " No document in your vault matches your KYC record.")),
+        "safety_note": "Saarthi never changes identity information. Your KYC record is unchanged.",
+    }
+
+
+def _analyze_transient(ctx, ev, pdiag, k):
+    by = _by(ev)
+    used = by["retry_history"]["value"]
+    norm_code = ctx["journey"]["state"].get("failure_code")
+    facts = [{"label": "Partner said", "value": norm_code, "source": f"{ctx['partner']['name']} API"},
+             {"label": "Type", "value": "Temporary · safe to retry", "source": "Knowledge base"},
+             {"label": "Automatic retries", "value": f"{used} of 2 used", "source": "Saarthi action log", "emphasis": True}]
+    options = []
+    if used < 2:
+        options.append(_option("retry_with_partner", "Retry automatically",
+                               "Re-sends the same request. Nothing new is shared and no money moves until the partner "
+                               "accepts it, so this is safe to do without asking.", {"attempt": used + 1}))
+    options.append(_escalate_option())
+    return {"confirmed": True, "facts": facts, "options": _recommend(options, "retry_with_partner" if used < 2 else "escalate_to_specialist"),
+            "metrics": {"retries_used": used}, "missing": [],
+            "headline": k["customer_meaning"],
+            "summary": f"{ctx['partner']['name']} returned a temporary error ({k['customer_meaning'].lower()}). "
+                       + ("It is safe to retry, so Saarthi will do it automatically." if used < 2 else
+                          "Two automatic retries didn't help, so a person should look at it."),
+            "safety_note": "Nothing was charged or shared. A retry repeats the same request."}
+
+
+def _analyze_monitor(ctx, ev, pdiag, k):
+    by = _by(ev)
+    mins = by["time_with_partner"]["value"] * 60
+    facts = [{"label": "Partner status", "value": k["customer_meaning"], "source": f"{ctx['partner']['name']} API"},
+             {"label": "Waiting for", "value": by["time_with_partner"]["display"], "source": "Journey memory"},
+             {"label": "Escalate when", "value": k["escalation_conditions"][0], "source": "Knowledge base", "emphasis": True}]
+    options = [_option("refresh_status", "Keep checking with the partner",
+                       "A read-only status check. Saarthi re-checks automatically and tells you the moment it changes."),
+               _escalate_option("Open a support case now with full context.")]
+    return {"confirmed": True, "facts": facts, "options": _recommend(options, "refresh_status"),
+            "metrics": {"minutes_waiting": round(mins)}, "missing": [], "headline": k["customer_meaning"],
+            "summary": f"{ctx['partner']['name']} hasn't finished: {k['customer_meaning'].lower()}. There's nothing to fix "
+                       "yet, so Saarthi monitors the partner and escalates if it takes too long.",
+            "safety_note": "No action is needed from you right now."}
+
+
+def _analyze_human_only(ctx, ev, pdiag, k):
+    facts = [{"label": "Partner said", "value": ctx["journey"]["state"].get("failure_code"), "source": f"{ctx['partner']['name']} API"},
+             {"label": "Meaning", "value": k["customer_meaning"], "source": "Knowledge base"},
+             {"label": "Automation", "value": "Not permitted", "source": "Saarthi policy", "emphasis": True}]
+    return {"confirmed": True, "risk_signal": k.get("risk_level") == "high", "facts": facts,
+            "options": _recommend([_escalate_option()], "escalate_to_specialist"), "metrics": {}, "missing": [],
+            "headline": k["customer_meaning"],
+            "summary": f"{ctx['partner']['name']} reported: {k['customer_meaning'].lower()}. This needs a person; "
+                       "Saarthi won't override a partner decision or act on an identity risk.",
+            "safety_note": "Nothing was changed. A specialist will contact you with the full case file."}
+
+
+def _analyze_mandate_invalid(ctx, ev, pdiag, k):
+    by = _by(ev)
+    m = ctx["mandate"]
+    amount = by["installment_amount"]["value"]
+    acc = ctx["linked_account"]
+    new_limit = float(max(amount, m["max_amount"]))
+    facts = [{"label": "Mandate", "value": f"{m['umrn']} · {by['mandate_status']['display']}", "source": by["mandate_status"]["source"]},
+             {"label": "Installment", "value": inr(amount), "source": by["installment_amount"]["source"]},
+             {"label": "Needed", "value": "A new autopay mandate", "source": "Knowledge base", "emphasis": True}]
+    options = [_option("create_new_mandate", f"Register a new autopay mandate ({inr(new_limit)} limit) and retry",
+                       f"Registers a fresh mandate on {acc['bank']} {acc['masked']} with a {inr(new_limit)} limit, "
+                       "then re-presents the installment.", {"account_id": acc["id"], "max_amount": new_limit,
+                                                              "old_umrn": m["umrn"], "amount": amount})]
+    return {"confirmed": True, "facts": facts, "options": _recommend(options, "create_new_mandate"),
+            "metrics": {"amount": amount, "new_limit": new_limit}, "missing": [], "headline": k["customer_meaning"],
+            "summary": f"The autopay mandate {m['umrn']} can't be used any more ({k['customer_meaning'].lower()}), so "
+                       f"{ctx['partner']['name']} refused the {inr(amount)} debit.",
+            "safety_note": "No money left your account. A new mandate needs your approval."}
+
+
+def _analyze_debit_inference(ctx, ev, pdiag, k):
+    """A generic 'recurring debit failed': infer the cause from evidence, or refuse to guess."""
+    by = _by(ev)
+    amount, bal, limit = by["installment_amount"]["value"], by["mandate_account_balance"]["value"], by["mandate_limit"]["value"]
+    if limit is not None and amount > limit:
+        out = _analyze_mandate_limit(ctx, ev, pdiag)
+        out["summary"] = "The bank gave no reason, but the evidence explains it: " + out["summary"][0].lower() + out["summary"][1:]
+        return out
+    if bal < amount:
+        out = _analyze_payment(ctx, ev, pdiag)
+        out["summary"] = "The bank gave no reason, but the evidence explains it: " + out["summary"]
+        return out
+    facts = [{"label": "Balance", "value": inr(bal), "source": by["mandate_account_balance"]["source"]},
+             {"label": "Installment", "value": inr(amount), "source": by["installment_amount"]["source"]},
+             {"label": "Autopay limit", "value": inr(limit), "source": by["mandate_limit"]["source"], "emphasis": True}]
+    return {"confirmed": False, "facts": facts, "options": _recommend([_escalate_option()], "escalate_to_specialist"),
+            "metrics": {"amount": amount, "balance": bal, "limit": limit},
+            "missing": ["The bank's actual reason for the return"], "headline": "Saarthi couldn't confirm why the debit failed",
+            "summary": "The bank returned a generic failure, and neither the balance nor the autopay limit explains it. "
+                       "Saarthi won't guess, so a specialist should check with the bank.",
+            "safety_note": "No money left your account."}
+
+
+def _analyze_payment_retry(ctx, ev, pdiag, k):
+    by = _by(ev)
+    due, bal = by["payment_amount"]["value"], by["paying_account_balance"]["value"]
+    acc = ctx["linked_account"]
+    short = round(max(due - bal, 0), 2)
+    sources = sorted([a for a in ctx["accounts"] if a["id"] != acc["id"] and a["status"] == "VERIFIED"
+                      and a["balance"] >= short + SAFETY_BUFFER], key=lambda a: -a["balance"])
+    options = []
+    if short == 0:
+        options.append(_option("retry_payment", f"Pay {inr(due)} from {acc['bank']} {acc['masked']} now",
+                               f"The account now holds {inr(bal)}. Saarthi asks {ctx['partner']['name']} to collect the premium again.",
+                               {"amount": due}))
+    elif sources:
+        src = sources[0]
+        options.append(_option("fund_and_retry_payment", f"Move {inr(short)} from {src['bank']} {src['masked']} and pay",
+                               f"Transfers exactly the shortfall from your own verified account, then retries the premium.",
+                               {"source_account": src["id"], "target_account": acc["id"], "amount": short,
+                                "source_label": f"{src['bank']} {src['masked']}", "target_label": f"{acc['bank']} {acc['masked']}",
+                                "source_balance": src["balance"]}))
+    options.append(_option("remind_before_window", "Remind me to top up", "No money moves.", {"shortfall": short}))
+    facts = [{"label": "Premium due", "value": inr(due), "source": by["payment_amount"]["source"]},
+             {"label": "Available", "value": inr(bal), "source": by["paying_account_balance"]["source"]},
+             {"label": "Shortfall", "value": inr(short), "source": "Computed by Saarthi", "emphasis": True}]
+    return {"confirmed": True, "facts": facts, "options": _recommend(options, options[0]["action_type"]),
+            "metrics": {"due": due, "available": bal, "shortfall": short}, "missing": [],
+            "headline": "Your premium payment didn't go through",
+            "summary": f"{ctx['partner']['name']} couldn't collect the {inr(due)} premium from {acc['bank']} {acc['masked']} "
+                       f"(balance {inr(bal)}).",
+            "safety_note": "Your application is saved. No premium was charged."}
+
+
+def _analyze_account_unverified(ctx, ev, pdiag, k):
+    acc = ctx["linked_account"]
+    others = [a for a in ctx["accounts"] if a["status"] == "VERIFIED" and (not acc or a["id"] != acc["id"])]
+    options = []
+    if others:
+        o = others[0]
+        options.append(_option("switch_partner_account", f"Use {o['bank']} {o['masked']} instead",
+                               f"{o['bank']} {o['masked']} is verified in your name. Saarthi updates the application.",
+                               {"account_id": o["id"], "label": f"{o['bank']} {o['masked']}"}))
+    options.append(_escalate_option())
+    facts = [{"label": "Selected account", "value": f"{acc['bank']} {acc['masked']} · {acc['status'].lower()}" if acc else "None",
+              "source": "Application"},
+             {"label": "Verified accounts", "value": ", ".join(f"{a['bank']} {a['masked']}" for a in others) or "None",
+              "source": "Linked accounts", "emphasis": True}]
+    return {"confirmed": True, "facts": facts, "options": _recommend(options, options[0]["action_type"]), "metrics": {},
+            "missing": [] if others else ["A verified bank account in your name"], "headline": k["customer_meaning"],
+            "summary": f"{ctx['partner']['name']} will only pay out to a verified account in your name, and the selected "
+                       "account isn't verified." + (f" {others[0]['bank']} {others[0]['masked']} is." if others else ""),
+            "safety_note": "No money was sent anywhere."}
+
+
+ANALYZERS = {"insufficient_funds": lambda c, e, p, k: _analyze_payment(c, e, p),
+             "mandate_limit": lambda c, e, p, k: _analyze_mandate_limit(c, e, p),
+             "name_mismatch": lambda c, e, p, k: _analyze_name(c, e, p),
+             "document_requirement": _analyze_document, "identity_mismatch": _analyze_identity,
+             "transient": _analyze_transient, "monitor": _analyze_monitor, "human_only": _analyze_human_only,
+             "mandate_invalid": _analyze_mandate_invalid, "debit_inference": _analyze_debit_inference,
+             "payment_retry": _analyze_payment_retry, "account_unverified": _analyze_account_unverified}
+
+
+def analyze(k: dict, ctx: dict, ev: list[dict], pdiag: dict) -> dict:
+    return ANALYZERS[k["analyzer"]](ctx, ev, pdiag, k)
 
 
 def confidence(ev: list[dict], analysis: dict, stats: dict | None) -> float:
@@ -244,11 +510,16 @@ def assemble(ctx, perceived, kb, ev, analysis, knowledge_hits) -> dict:
         "partner": norm, "partner_raw": snap["raw"], "partner_diagnose_raw": pdiag["raw"],
         "partner_endpoints": [snap["endpoint"], pdiag["endpoint"]],
         "normalized": {"partner_code": code, "failure_type": k["failure_type"], "standard_code": k["standard_code"],
-                       "meaning": k["meaning"], "root_cause": k["root_cause"],
+                       "meaning": k["meaning"], "root_cause": k["root_cause"], "analyzer": k["analyzer"],
+                       "risk_level": k.get("risk_level"), "journey_type": k.get("journey_type"),
+                       "possible_causes": k.get("possible_causes", []),
+                       "escalation_conditions": k.get("escalation_conditions", []),
+                       "automatic_action_allowed": k.get("automatic_action_allowed"),
                        "evidence_required": k["evidence_required"], "retry_allowed": k["retry_allowed"],
                        "policy_tier": k["action_tier"], "expected_outcome": k["expected_outcome"],
                        "equivalents": retrieval.equivalent_codes(k["standard_code"])},
-        "kb_entry": {"id": kb["id"], "title": kb["title"], "body": kb["body"], "data": k},
+        "kb_entry": {"id": kb["id"], "title": kb["title"], "body": kb["body"], "source": kb.get("source"), "data": k},
+        "document_evidence": analysis.get("document_evidence"),
         "evidence": ev, "facts": analysis["facts"], "metrics": analysis["metrics"],
         "name_match": analysis.get("name_match"), "risk_signal": analysis.get("risk_signal", False),
         "root_cause_confirmed": analysis["confirmed"], "missing": analysis["missing"],
@@ -258,9 +529,31 @@ def assemble(ctx, perceived, kb, ev, analysis, knowledge_hits) -> dict:
     }
 
 
-def unmapped(ctx, perceived) -> dict:
+def unmapped(ctx, perceived, rag_hits: list | None = None) -> dict:
+    """No knowledge for this code: say so plainly and route to a human. Never guess."""
     snap = perceived["snap"]
-    return {"journey_id": ctx["journey"]["id"], "status": "UNMAPPED", "partner": snap["normalized"],
-            "partner_raw": snap["raw"], "confidence": 0.2, "steps": [], "options": [], "evidence": [],
-            "knowledge": [], "headline": "Saarthi couldn't map this partner status",
-            "summary": "This partner code isn't in Saarthi's knowledge base yet, so it needs a human."}
+    n = snap["normalized"]
+    code = n["raw_code"] or "UNKNOWN"
+    return {
+        "journey_id": ctx["journey"]["id"], "status": "DIAGNOSED", "unknown": True,
+        "incident": ctx["journey"]["state"].get("incident"),
+        "partner": n, "partner_raw": snap["raw"], "partner_diagnose_raw": perceived["pdiag"]["raw"],
+        "partner_endpoints": [snap["endpoint"], perceived["pdiag"]["endpoint"]],
+        "normalized": {"partner_code": code, "failure_type": "UNKNOWN", "standard_code": "UNKNOWN",
+                       "meaning": "Unrecognised partner code", "root_cause": "Not in Saarthi's knowledge base",
+                       "analyzer": None, "risk_level": "high", "evidence_required": [], "retry_allowed": False,
+                       "policy_tier": "TIER_3", "expected_outcome": "A specialist identifies the issue",
+                       "possible_causes": [], "escalation_conditions": ["Always"], "equivalents": []},
+        "kb_entry": None, "evidence": [],
+        "facts": [{"label": "Partner", "value": n["partner_name"], "source": "Partner API"},
+                  {"label": "Code", "value": code, "source": "Partner API"},
+                  {"label": "Knowledge found", "value": "None reliable", "source": "Registry + RAG", "emphasis": True}],
+        "metrics": {}, "name_match": None, "risk_signal": True, "root_cause_confirmed": False,
+        "missing": [f"What {code} means"], "options": [_option("escalate_to_specialist", "Hand over to a specialist",
+                                                              "A specialist checks the code with the partner.", recommended=True)],
+        "confidence": 0.0, "learned": None, "knowledge": rag_hits or [], "steps": [],
+        "headline": "Saarthi couldn't confidently identify this issue",
+        "summary": f"{n['partner_name']} returned {code}, which isn't in Saarthi's knowledge base, and retrieval found "
+                   "nothing reliable about it. Saarthi won't guess a fix; this needs human review.",
+        "safety_note": "No action was taken on your account.",
+    }

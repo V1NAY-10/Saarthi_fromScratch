@@ -13,6 +13,10 @@ class ProductError(Exception):
     """A validation / business-rule error that should be shown to the user as-is."""
 
 
+class NotFound(ProductError):
+    """The resource doesn't exist for this user (also used for other users' resources)."""
+
+
 def create(user_id: str, category: str, title: str, subtitle: str, partner_id: str, ref: str, amount: float,
            stage: str, state: dict, status: str = "ON_TRACK") -> str:
     jid = f"j-{uuid.uuid4().hex[:8]}"

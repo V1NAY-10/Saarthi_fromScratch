@@ -52,7 +52,7 @@ export function AgentTrace({ run, compact = false, replay = false, onDone }: { r
       {working && (
         <div className="trace-step">
           <span className="trace-ic run"><Loader2 size={14} className="spin" /></span>
-          <div className="trace-why" style={{ paddingTop: 4 }}>{run.mode.startsWith('llm') ? 'Claude is reasoning…' : 'Working…'}</div>
+          <div className="trace-why" style={{ paddingTop: 4 }}>{run.mode.startsWith('llm') ? 'Gemini is reasoning…' : 'Working…'}</div>
         </div>
       )}
       {run.status === 'FAILED' && <div className="form-err">The agent stopped: {run.error}</div>}
@@ -93,10 +93,10 @@ function Step({ s, compact }: { s: TraceStep; compact: boolean }) {
 }
 
 export function AgentBadge({ run }: { run: AgentRun }) {
-  const claude = run.mode === 'llm'
+  const isLlm = run.mode === 'llm'
   return (
-    <span className={`pill ${claude ? 'pill-info' : 'pill-neutral'}`}>
-      {claude ? <><Sparkles size={11} /> Claude agent</> : run.mode === 'llm+fallback' ? 'Claude → planner fallback' : 'Deterministic planner'}
+    <span className={`pill ${isLlm ? 'pill-info' : 'pill-neutral'}`}>
+      {isLlm ? <><Sparkles size={11} /> Gemini agent</> : run.mode === 'llm+fallback' ? 'Gemini → planner fallback' : 'Deterministic planner'}
     </span>
   )
 }

@@ -59,10 +59,21 @@ CREATE TABLE IF NOT EXISTS failure_patterns (
 );
 CREATE TABLE IF NOT EXISTS documents (
   id TEXT PRIMARY KEY, user_id TEXT, doc_type TEXT, name TEXT, status TEXT,
-  source TEXT, updated_at TEXT, meta_json TEXT
+  source TEXT, updated_at TEXT, meta_json TEXT, latest_version INTEGER, latest_version_id TEXT,
+  verification_status TEXT, expiry_date TEXT
+);
+CREATE TABLE IF NOT EXISTS document_versions (
+  id TEXT PRIMARY KEY, document_id TEXT, user_id TEXT, version INTEGER, storage TEXT, file_key TEXT,
+  file_url TEXT, file_hash TEXT, mime_type TEXT, size INTEGER, original_name TEXT, uploaded_at TEXT,
+  status TEXT, extracted_text TEXT, fields_json TEXT, checks_json TEXT
 );
 CREATE TABLE IF NOT EXISTS journey_documents (
-  journey_id TEXT, document_id TEXT, role TEXT, PRIMARY KEY (journey_id, document_id)
+  journey_id TEXT, document_id TEXT, role TEXT, version_id TEXT, attached_at TEXT,
+  PRIMARY KEY (journey_id, role)
+);
+CREATE TABLE IF NOT EXISTS knowledge_refs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, journey_id TEXT, run_id TEXT, chunk_id TEXT, engine TEXT,
+  score REAL, ts TEXT
 );
 CREATE TABLE IF NOT EXISTS decisions (
   id TEXT PRIMARY KEY, journey_id TEXT, option_id TEXT, tier TEXT,

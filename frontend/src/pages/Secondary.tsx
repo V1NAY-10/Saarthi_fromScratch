@@ -1,9 +1,9 @@
-import { BadgeCheck, BookOpen, ChevronRight, Clock, FileText, LogOut } from 'lucide-react'
+import { BadgeCheck, BookOpen, ChevronRight, Landmark, LogOut } from 'lucide-react'
 import { JourneyRow } from '../components/journey'
 import { Skeleton, TierBadge, TopBar } from '../components/ui'
 import { useApp, useData } from '../hooks/useApp'
 import { api } from '../services/api'
-import { PARTNER_SHORT, dateTime } from '../services/format'
+import { PARTNER_SHORT } from '../services/format'
 
 export function JourneysList() {
   const { pop } = useApp()
@@ -29,17 +29,12 @@ export function JourneysList() {
   )
 }
 
-const DOC_STATUS: Record<string, [string, string]> = {
-  VERIFIED: ['Verified', 'pill-ok'], FAILED: ['Failed', 'pill-bad'], UNDER_REVIEW: ['Under review', 'pill-warn'],
-}
-
 export function Profile() {
-  const { overview, push, signOut } = useApp()
-  const { data } = useData(() => api.documents())
+  const { overview, push, pop, signOut } = useApp()
   const u = overview?.user
   return (
     <div>
-      <TopBar title="Profile" sub="Identity, documents & knowledge" />
+      <TopBar title="Profile" sub="Identity, knowledge & settings" onBack={pop} />
       <div className="page">
         {u && (
           <div className="card card-pad row" style={{ gap: 12 }}>
@@ -52,24 +47,13 @@ export function Profile() {
           </div>
         )}
         <div className="section">
-          <div className="section-head"><div className="section-title">Document vault</div></div>
-          {!data ? <Skeleton h={100} /> : !data.length ? <div className="card empty">No documents.</div> : (
-            <div className="stack">
-              {data.map(d => {
-                const [label, cls] = DOC_STATUS[d.status] ?? [d.status, 'pill-neutral']
-                return (
-                  <div key={d.id} className="card card-pad row" style={{ alignItems: 'flex-start', gap: 12 }}>
-                    <div className="cat-icon" style={{ width: 36, height: 36, background: 'var(--surface-2)', color: 'var(--brand)' }}><FileText size={17} /></div>
-                    <div className="grow">
-                      <div className="between"><div style={{ fontWeight: 700, fontSize: 13.5 }}>{d.name}</div><span className={`pill ${cls}`}>{label}</span></div>
-                      <div className="muted row" style={{ fontSize: 11.5, marginTop: 4, gap: 5 }}><Clock size={11} /> {dateTime(d.updated_at)} · {d.source}</div>
-                      {d.meta.number && <div className="ink2 mono" style={{ fontSize: 12, marginTop: 4 }}>{d.meta.number} · {d.meta.name}</div>}
-                    </div>
-                  </div>
-                )
-              })}
-            </div>
-          )}
+          <div className="card">
+            <button className="list-row tap" style={{ width: '100%', textAlign: 'left' }} onClick={() => push({ name: 'banks' })}>
+              <div className="cat-icon cat-loan" style={{ width: 34, height: 34 }}><Landmark size={16} /></div>
+              <div className="grow"><div className="t">Bank accounts</div><div className="s">Linked accounts and sandbox balances</div></div>
+              <ChevronRight size={16} className="muted" />
+            </button>
+          </div>
         </div>
         <div className="section">
           <div className="card">

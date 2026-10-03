@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends
 
-from app.api.deps import current_user
 from app.database import db
 from app.knowledge import retrieval
 
@@ -21,10 +20,22 @@ def knowledge():
 
 
 @router.get("/knowledge/search")
-def search(q: str, k: int = 5):
-    return retrieval.index().search(q, k=k)
+def search(q: str, k: int = 5, partner_id: str | None = None):
+    """RAG retrieval over the Markdown knowledge base (Cognee, or BM25 fallback)."""
+    return {"status": retrieval.status(), "hits": retrieval.search(q, k=k, partner_id=partner_id)}
 
 
-@router.get("/documents")
-def documents(user=Depends(current_user)):
-    return db.query("SELECT * FROM documents WHERE user_id=? ORDER BY updated_at DESC", (user["id"],))
+@router.get("/knowledge/status")
+def knowledge_status():
+    return retrieval.status()
+
+
+@router.post("/knowledge/reingest")
+def reingest():
+    """Reload the Markdown files and re-ingest them into Cognee (in the background)."""
+    from app.database import seed
+    seed.load_knowledge()
+    retrieval.reset_index()
+    import threading
+    threading.Thread(target=retrieval.cognee_engine.ingest, kwargs={"force": True}, daemon=True).start()
+    return retrieval.status()

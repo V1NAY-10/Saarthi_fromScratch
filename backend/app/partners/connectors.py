@@ -15,7 +15,7 @@ _OK_CODES = {"DEBIT_OK", "BAV_OK", "MANDATE_OK", "IMPS_SUCCESS", "ACK"}
 
 def _normalize(pid: str, op: str, raw: dict) -> dict:
     code, msg, state = None, None, "PENDING"
-    p = simulators.PARTNERS.get(pid)
+    p = simulators.PARTNERS.get(pid) or simulators.get(pid)
     if isinstance(p, simulators.SandboxBank) and p.dialect == "nach":
         code, msg = raw.get("respCode"), raw.get("respMsg")
         flag = raw.get("txnStatus") or raw.get("bavStatus")
@@ -35,6 +35,24 @@ def _normalize(pid: str, op: str, raw: dict) -> dict:
             code = None
         elif code:
             state = "FAILED"
+    elif type(p).__name__ == "ApplicationPartner" and op == "diagnose":
+        state, code = "PENDING", None
+    elif type(p).__name__ == "ApplicationPartner":
+        if p.dialect == "nested":
+            st = raw.get("status") or {}
+            code, msg, appstate = st.get("code"), st.get("desc"), st.get("state")
+        else:
+            code, msg, appstate = raw.get("reasonCode"), raw.get("reasonText"), raw.get("appStatus")
+            if code == "00":
+                code = None
+        if appstate in ("DISBURSED", "ISSUED", "VERIFIED"):
+            state, code = "SUCCESS", None
+        elif appstate == "PENDING":
+            state = "PENDING"
+        elif appstate in ("REJECTED", "ERROR"):
+            state = "FAILED"
+        else:
+            state, code = "PENDING", None
     elif pid == "aa":
         code, state = raw.get("status"), "SUCCESS" if raw.get("status") == "DATA_READY" else "FAILED"
     elif pid == "nsdl":
@@ -43,7 +61,8 @@ def _normalize(pid: str, op: str, raw: dict) -> dict:
     else:
         state = "SUCCESS" if raw.get("ack") else "PENDING"
     partner = db.query_one("SELECT name FROM partners WHERE id=?", (pid,))
-    return {"partner_id": pid, "partner_name": partner["name"] if partner else pid, "state": state,
+    from app.knowledge import registry
+    return {"partner_id": pid, "partner_name": partner["name"] if partner else registry.partner_name(pid), "state": state,
             "raw_code": code, "raw_message": msg}
 
 

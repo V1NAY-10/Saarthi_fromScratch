@@ -1,4 +1,4 @@
-import { Home, Landmark, TrendingUp, UserRound } from 'lucide-react'
+import { Home, Landmark, TrendingUp } from 'lucide-react'
 import { useApp, type Tab } from '../hooks/useApp'
 import { SaarthiMark } from './ui'
 
@@ -6,8 +6,7 @@ const ITEMS: { key: Tab; label: string; Icon?: typeof Home }[] = [
   { key: 'home', label: 'Home', Icon: Home },
   { key: 'invest', label: 'Invest', Icon: TrendingUp },
   { key: 'saarthi', label: 'Saarthi' },
-  { key: 'banks', label: 'Banks', Icon: Landmark },
-  { key: 'profile', label: 'Profile', Icon: UserRound },
+  { key: 'loans', label: 'Loans', Icon: Landmark },
 ]
 
 export function BottomNav() {

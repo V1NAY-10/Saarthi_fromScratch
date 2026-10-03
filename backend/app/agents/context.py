@@ -43,6 +43,14 @@ def build(journey_id: str) -> dict:
     actions = db.query("SELECT * FROM actions WHERE journey_id=? AND created_at>=? ORDER BY created_at",
                        (journey_id, since))
     events = journal.timeline(journey_id)
+    from app.knowledge import registry
+    from app.product import vault
+    attached = db.query("""SELECT jd.role, jd.version_id, jd.document_id, v.version, v.fields_json, v.checks_json,
+                                  d.doc_type, d.name FROM journey_documents jd
+                           JOIN document_versions v ON v.id = jd.version_id
+                           JOIN documents d ON d.id = jd.document_id WHERE jd.journey_id=?""", (journey_id,))
+    for a in attached:
+        a["fields"], a["checks"] = a.pop("fields") or {}, a.pop("checks") or {}
     return {
         "journey": j,
         "user": {"id": user["id"], "name": user["name"], "pan": user["pan"], "kyc_status": user["kyc_status"],
@@ -50,6 +58,8 @@ def build(journey_id: str) -> dict:
         "partner": partner, "accounts": accounts, "linked_account": linked, "sip": sip, "mandate": mandate,
         "fund": fund, "documents": docs, "events": events, "previous_actions": actions,
         "previous_failures": [e for e in events if e["status"] == "failed"],
+        "application": st.get("application"), "attached": {a["role"]: a for a in attached},
+        "vault": vault.latest_versions(j["user_id"]), "requirements": registry.requirements(j["partner_id"]),
     }
 
 
@@ -74,6 +84,13 @@ def summary_for_agent(ctx: dict) -> dict:
     if ctx["mandate"]:
         out["mandate"] = {"umrn": ctx["mandate"]["umrn"], "max_amount": ctx["mandate"]["max_amount"],
                           "status": ctx["mandate"]["status"]}
+    if ctx.get("application"):
+        a = ctx["application"]
+        out["application"] = {k: a[k] for k in ("amount", "tenure_months", "monthly_income", "plan", "cover", "premium")
+                              if k in a}
+        out["attached_documents"] = {r: {"type": d["doc_type"], "version": d["version"],
+                                         "fields": {k: v for k, v in d["fields"].items() if not k.startswith("_")}}
+                                     for r, d in ctx["attached"].items()}
     if st.get("aa_ownership"):
         out["previous_ownership_check"] = st["aa_ownership"]
     return out

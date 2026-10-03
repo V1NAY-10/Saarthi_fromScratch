@@ -8,7 +8,7 @@ from app.agents import chat, orchestrator
 from app.api.deps import current_user
 from app.database import db, seed
 from app.knowledge import retrieval
-from app.product import accounts, sips, users
+from app.product import accounts, demo, sips, users
 from app.services import journal
 from app.services.fmt import inr
 
@@ -22,8 +22,11 @@ class ChatBody(BaseModel):
 
 @router.get("/system")
 def system():
+    from app.knowledge import retrieval
+    from app.services import storage
     return {"demo_mode": config.DEMO_MODE, "llm_enabled": config.llm_enabled(), "model": config.SAARTHI_MODEL,
-            "agent_mode": "claude" if config.llm_enabled() else "deterministic"}
+            "agent_mode": "gemini" if config.llm_enabled() else "deterministic", "knowledge": retrieval.status(),
+            "storage": storage.status()}
 
 
 def _insights(accs: list[dict], my_sips: list[dict]) -> list[dict]:
@@ -95,3 +98,14 @@ def reset():
     seed.seed()
     retrieval.reset_index()
     return {"ok": True}
+
+
+@router.get("/demo/scenarios")
+def demo_scenarios():
+    return demo.SCENARIOS
+
+
+@router.post("/demo/scenarios/{sid}")
+def run_scenario(sid: str, user=Depends(current_user)):
+    """Runs a scenario as ordinary user actions; the real pipeline produces the failure."""
+    return demo.run(user, sid)
