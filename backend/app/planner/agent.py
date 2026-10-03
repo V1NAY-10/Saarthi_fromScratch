@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Optional
 
 from app import config
 from app.agents import llm
-from app.planner import engine, service
+from app.planner import service
 from app.services.fmt import inr
 
 PLANNER_SYSTEM_PROMPT = """You are Saarthi's AI Financial Planner Agent.
@@ -82,40 +82,36 @@ def _get_context_summary(user_id: str) -> Dict[str, Any]:
     }
 
 
+_AMOUNT_RE = re.compile(r"(₹|rs\.?|inr)?\s*(\d[\d,]*(?:\.\d+)?)\s*(k|thousand|lakhs?|lacs?|l|crores?|cr)?\b")
+_UNITS = {"k": 1e3, "thousand": 1e3, "l": 1e5, "lakh": 1e5, "lakhs": 1e5, "lac": 1e5, "lacs": 1e5,
+          "cr": 1e7, "crore": 1e7, "crores": 1e7}
+
+
+def _purchase_amount(text: str) -> Optional[float]:
+    """The rupee amount in a purchase question. Prefers numbers marked with ₹/Rs or a unit
+    ("1.5L", "75k") so model numbers like "iPhone 15" aren't read as prices."""
+    best, best_marked = None, False
+    for m in _AMOUNT_RE.finditer(text):
+        try:
+            value = float(m.group(2).replace(",", "")) * _UNITS.get(m.group(3) or "", 1.0)
+        except ValueError:
+            continue
+        marked = bool(m.group(1) or m.group(3))
+        if (marked, value) > (best_marked, best or 0.0):
+            best, best_marked = value, marked
+    return best if best and best >= 100 else None
+
+
 def ask_planner(user_id: str, message: str) -> Dict[str, Any]:
     ctx = _get_context_summary(user_id)
     text = message.strip().lower()
 
-    # Pre-check for "Can I afford" queries to run deterministic simulation
-    afford_match = re.search(r"(?:can i afford|afford to buy|spend|buy)\s*(?:a|an)?\s*([^\d]+)?\s*₹?\s*([\d,]+(?:\.\d+)?)\s*(k|l|lakh|cr)?", text)
+    # Purchase questions get a deterministic affordability simulation first
     sim_result = None
-    if afford_match:
-        try:
-            raw_amt = afford_match.group(2).replace(",", "")
-            multiplier = 1.0
-            unit = (afford_match.group(3) or "").lower()
-            if unit == "k":
-                multiplier = 1000.0
-            elif unit in ("l", "lakh"):
-                multiplier = 100000.0
-            elif unit == "cr":
-                multiplier = 10000000.0
-
-            amount = float(raw_amt) * multiplier
-            cc = service.build_command_center(user_id)
-            sim_result = engine.simulate_affordability(
-                purchase_amount=amount,
-                is_recurring=False,
-                frequency="one_time",
-                current_liquid=ctx["liquid_cash"],
-                monthly_income=ctx["monthly_income"],
-                monthly_surplus=ctx["monthly_surplus"],
-                essential_monthly_expenses=ctx["fixed_expenses"] + ctx["emis_monthly"],
-                active_goals=cc["goals"],
-                upcoming_7d_obligations=sum(o["amount"] for o in cc["obligations"] if o["due"] <= (engine.date.today() + engine.timedelta(days=7)).isoformat()),
-            )
-        except Exception:
-            pass
+    if re.search(r"\b(afford|buy|purchase|spend)\b", text):
+        amount = _purchase_amount(text)
+        if amount:
+            sim_result = service.affordability(user_id, amount)
 
     # If Gemini is enabled, generate rich conversational reasoning
     if config.llm_enabled():
@@ -144,7 +140,7 @@ If they asked why a goal is behind, explain the required monthly contribution vs
                     "context": ctx,
                     "agent_mode": "gemini",
                 }
-        except Exception as e:
+        except Exception:
             # Fall back to deterministic reply below
             pass
 
@@ -156,7 +152,8 @@ If they asked why a goal is behind, explain the required monthly contribution vs
         rw_after = sim_result["runway_after_months"]
 
         if verdict == "HIGH_RISK":
-            reply = f"A ₹{pur:,} purchase is high risk right now. It would cause a cash-flow shortfall for your upcoming commitments within 7 days, leaving ₹{liq_after:,} in liquid funds."
+            reason = sim_result["warnings"][0] if sim_result["warnings"] else "It would strain your liquid funds."
+            reply = f"A ₹{pur:,} purchase is high risk right now. {reason} It would leave ₹{liq_after:,} in liquid funds."
         elif verdict == "CAUTION":
             reply = f"You could afford ₹{pur:,}, but with caution. Your remaining liquid buffer would be ₹{liq_after:,}, reducing your emergency runway to {rw_after} months."
         else:
@@ -183,8 +180,12 @@ If they asked why a goal is behind, explain the required monthly contribution vs
     elif "saving" in text or "surplus" in text or "income" in text:
         reply = f"Your monthly income is ₹{int(ctx['monthly_income']):,} ({ctx['income_source']}). After committed outflows of ₹{int(ctx['committed_outflow']):,} (SIPs ₹{int(ctx['sips_monthly']):,}, EMIs ₹{int(ctx['emis_monthly']):,}), your estimated surplus is ₹{int(ctx['monthly_surplus']):,}/month."
     elif "upcoming" in text or "payment" in text or "due" in text or "calendar" in text:
-        sample_str = ", ".join([f"{o['title']} (₹{int(o['amount']):,} on {o['due']})" for o in ctx["upcoming_sample"][:3]])
-        reply = f"You have {ctx['upcoming_obligations_count']} upcoming commitments. Nearest items: {sample_str}."
+        if ctx["upcoming_sample"]:
+            sample_str = ", ".join([f"{o['title']} (₹{int(o['amount']):,} on {o['due']})" for o in ctx["upcoming_sample"][:3]])
+            n = ctx["upcoming_obligations_count"]
+            reply = f"You have {n} upcoming commitment{'s' if n != 1 else ''}. Nearest: {sample_str}."
+        else:
+            reply = "You have no upcoming SIPs, EMIs or premiums scheduled right now."
     else:
         reply = f"Your financial snapshot: Net worth is ₹{int(ctx['net_worth']):,} with ₹{int(ctx['liquid_cash']):,} in liquid bank balances and ₹{int(ctx['investments_value']):,} invested. Monthly surplus is ₹{int(ctx['monthly_surplus']):,}. How can I help optimize your plan?"
 

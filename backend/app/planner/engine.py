@@ -303,7 +303,11 @@ def simulate_affordability(
 
     verdict = "AFFORDABLE"
     warnings = []
-    if immediate_shortfall > 0:
+    uncovered = max(0.0, one_time_impact - current_liquid)
+    if uncovered > 0:
+        verdict = "HIGH_RISK"
+        warnings.append(f"Exceeds your available bank balance by ₹{int(uncovered):,}.")
+    elif immediate_shortfall > 0:
         verdict = "HIGH_RISK"
         warnings.append(f"Leaves you ₹{int(immediate_shortfall):,} short for obligations in the next 7 days.")
     elif runway_after < 3.0:
@@ -340,14 +344,17 @@ def simulate_what_if(
     sip_delta_abs: float = 0.0,
     expense_delta_abs: float = 0.0,
     one_time_expense: float = 0.0,
+    base_other_outflow: float = 0.0,
 ) -> Dict[str, Any]:
+    """base_other_outflow: discretionary spend, insurance and goal contributions. It reduces
+    surplus on both sides but is not part of the essential runway denominator."""
     new_income = max(0.0, base_income * (1.0 + income_delta_pct / 100.0))
     new_sips = max(0.0, base_sips + sip_delta_abs)
     new_expenses = max(0.0, base_fixed_expenses + expense_delta_abs)
     new_liquid = max(0.0, base_liquid - one_time_expense)
 
-    base_surplus = base_income - (base_fixed_expenses + base_emis + base_sips)
-    new_surplus = new_income - (new_expenses + base_emis + new_sips)
+    base_surplus = base_income - (base_fixed_expenses + base_emis + base_sips + base_other_outflow)
+    new_surplus = new_income - (new_expenses + base_emis + new_sips + base_other_outflow)
 
     runway_before = round(base_liquid / (base_fixed_expenses + base_emis), 1) if (base_fixed_expenses + base_emis) > 0 else 99.0
     runway_after = round(new_liquid / (new_expenses + base_emis), 1) if (new_expenses + base_emis) > 0 else 99.0
@@ -499,10 +506,17 @@ def simulate_debt_extra_payment(
     r = (annual_interest_rate_pct / 100.0) / 12.0
     if outstanding_balance <= 0 or current_emi <= (outstanding_balance * r):
         return {
-            "months_remaining_base": 0,
-            "months_remaining_accelerated": 0,
+            "outstanding_balance": max(0.0, outstanding_balance),
+            "current_emi": current_emi,
+            "extra_payment": extra_monthly_payment,
+            "annual_interest_rate": annual_interest_rate_pct,
+            "base_months_remaining": 0,
+            "accelerated_months_remaining": 0,
             "months_saved": 0,
+            "base_total_interest": 0.0,
+            "accelerated_total_interest": 0.0,
             "interest_saved": 0.0,
+            "amortizes": outstanding_balance <= 0,
         }
 
     def _amortize(p: float, emi: float, monthly_r: float) -> Tuple[int, float]:
@@ -534,4 +548,5 @@ def simulate_debt_extra_payment(
         "base_total_interest": base_interest,
         "accelerated_total_interest": new_interest,
         "interest_saved": interest_saved,
+        "amortizes": True,
     }

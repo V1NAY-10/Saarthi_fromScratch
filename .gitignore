@@ -3,5 +3,9 @@ dist/
 .venv/
 __pycache__/
 *.pyc
+*.tsbuildinfo
 backend/saarthi.db
 backend/.env
+backend/uploads/
+backend/.storage_secret
+backend/.cognee_state.json

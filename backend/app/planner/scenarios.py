@@ -16,7 +16,11 @@ from datetime import date, timedelta
 from typing import Any, Dict
 
 from app.database import db
-from app.planner import engine, service
+from app.planner import service
+from app.product import vault
+from app.product.journeys import NotFound, ProductError
+
+SCENARIO_IDS = range(1, 8)
 
 
 def load_scenario(user_id: str, scenario_id: int) -> Dict[str, Any]:
@@ -134,54 +138,23 @@ def load_scenario(user_id: str, scenario_id: int) -> Dict[str, Any]:
 
     elif scenario_id == 3:
         # Scenario 3: Affordability simulator trigger
-        cc = service.build_command_center(user_id)
-        sim = engine.simulate_affordability(
-            purchase_amount=75000.0,
-            is_recurring=False,
-            frequency="one_time",
-            current_liquid=cc["net_worth"]["asset_breakdown"]["liquid_cash"],
-            monthly_income=cc["profile"]["monthly_income"],
-            monthly_surplus=cc["cash_flow"]["estimated_surplus"],
-            essential_monthly_expenses=cc["profile"]["essential_expenses"],
-            active_goals=cc["goals"],
-            upcoming_7d_obligations=15000.0,
-        )
         return {
             "scenario": 3,
             "title": "Can I Afford a ₹75,000 Phone?",
-            "simulation": sim,
+            "simulation": service.affordability(user_id, 75000.0),
         }
 
     elif scenario_id == 4:
         # Scenario 4: Increase SIP by ₹5k
-        cc = service.build_command_center(user_id)
-        sim = engine.simulate_what_if(
-            base_income=cc["profile"]["monthly_income"],
-            base_fixed_expenses=cc["profile"]["essential_expenses"],
-            base_emis=cc["cash_flow"]["emis"],
-            base_sips=cc["cash_flow"]["sips"],
-            base_liquid=cc["net_worth"]["asset_breakdown"]["liquid_cash"],
-            active_goals=cc["goals"],
-            sip_delta_abs=5000.0,
-        )
         return {
             "scenario": 4,
             "title": "What If I Increase SIP by ₹5,000?",
-            "simulation": sim,
+            "simulation": service.what_if(user_id, sip_delta_abs=5000.0),
         }
 
     elif scenario_id == 5:
         # Scenario 5: Stress test - 20% income reduction shock
-        cc = service.build_command_center(user_id)
-        stress = engine.run_stress_test(
-            stress_type="INCOME_DROP_20",
-            monthly_income=cc["profile"]["monthly_income"],
-            fixed_expenses=cc["profile"]["essential_expenses"],
-            emis=cc["cash_flow"]["emis"],
-            sips=cc["cash_flow"]["sips"],
-            liquid_funds=cc["net_worth"]["asset_breakdown"]["liquid_cash"],
-            active_goals=cc["goals"],
-        )
+        stress = service.stress_test(user_id, "INCOME_DROP_20")
         return {
             "scenario": 5,
             "title": "Financial Stress Test: 20% Income Cut",
@@ -195,17 +168,15 @@ def load_scenario(user_id: str, scenario_id: int) -> Dict[str, Any]:
         if not j:
             from app.product import applications
             acc = db.query_one("SELECT * FROM accounts WHERE user_id=? AND status='VERIFIED'", (user_id,))
-            if acc:
-                try:
-                    user = db.query_one("SELECT * FROM users WHERE id=?", (user_id,))
-                    applications.start(user, "vistara_finance", {
-                        "amount": 350000.0,
-                        "tenure_months": 36,
-                        "monthly_income": 75000.0,
-                        "account_id": acc["id"],
-                    })
-                except Exception:
-                    pass
+            if not acc:
+                raise ProductError("Link a verified bank account first - the loan needs a payout account.")
+            user = db.query_one("SELECT * FROM users WHERE id=?", (user_id,))
+            applications.start(user, "vistara_finance", {
+                "amount": 350000.0,
+                "tenure_months": 36,
+                "monthly_income": 75000.0,
+                "account_id": acc["id"],
+            })
         return {
             "scenario": 6,
             "title": "Loan Journey Integrated in Plan",
@@ -214,15 +185,15 @@ def load_scenario(user_id: str, scenario_id: int) -> Dict[str, Any]:
 
     elif scenario_id == 7:
         # Scenario 7: Document Vault evidence reuse
-        docs = vault.list_for({"id": user_id})
-        has_salary = any(d.get("doc_type") == "salary_slip" for d in docs)
+        docs = vault.latest_versions(user_id)
+        has_salary = any(d.get("doc_type") == "SALARY_SLIP" for d in docs)
         if not has_salary:
             # Upload a sample salary slip into the vault for user
             acc = db.query_one("SELECT * FROM accounts WHERE user_id=?", (user_id,))
             user = db.query_one("SELECT * FROM users WHERE id=?", (user_id,))
             from app.services import samples
             data, filename = samples.generate("salary_slip", user, acc)
-            vault.upload(user, data, filename, "application/pdf", "salary_slip")
+            vault.upload(user, data, filename, "application/pdf", "SALARY_SLIP")
 
         return {
             "scenario": 7,
@@ -230,4 +201,4 @@ def load_scenario(user_id: str, scenario_id: int) -> Dict[str, Any]:
             "description": "Verified salary slip in Document Vault automatically grounds verified monthly income in the Financial Planner and auto-fulfills KYC/income proofs for future loan/credit journeys.",
         }
 
-    return {"error": "Unknown scenario id"}
+    raise NotFound("Unknown scenario id")

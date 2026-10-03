@@ -214,3 +214,40 @@ def test_debt_extra_payment():
     assert debt["months_saved"] > 0
     assert debt["interest_saved"] > 0.0
     assert debt["accelerated_months_remaining"] < debt["base_months_remaining"]
+
+
+def test_affordability_purchase_exceeding_balance_is_high_risk():
+    aff = engine.simulate_affordability(
+        purchase_amount=75000.0,
+        is_recurring=False,
+        frequency="one_time",
+        current_liquid=20000.0,
+        monthly_income=85000.0,
+        monthly_surplus=25000.0,
+        essential_monthly_expenses=35000.0,
+        active_goals=[],
+    )
+    assert aff["verdict"] == "HIGH_RISK"
+    assert aff["liquid_after"] == 0.0
+
+
+def test_debt_non_amortizing_loan_keeps_result_shape():
+    # EMI below the monthly interest never pays the loan down
+    debt = engine.simulate_debt_extra_payment(
+        outstanding_balance=500000.0,
+        current_emi=1000.0,
+        annual_interest_rate_pct=12.0,
+    )
+    assert debt["amortizes"] is False
+    for key in ("base_months_remaining", "accelerated_months_remaining", "base_total_interest",
+                "accelerated_total_interest", "months_saved", "interest_saved"):
+        assert key in debt
+
+
+def test_what_if_other_outflow_reduces_surplus_not_runway():
+    kw = dict(base_income=80000.0, base_fixed_expenses=30000.0, base_emis=10000.0, base_sips=15000.0,
+              base_liquid=100000.0, active_goals=[])
+    plain = engine.simulate_what_if(**kw)
+    with_other = engine.simulate_what_if(**kw, base_other_outflow=12000.0)
+    assert with_other["base"]["surplus"] == plain["base"]["surplus"] - 12000.0
+    assert with_other["base"]["runway_months"] == plain["base"]["runway_months"]

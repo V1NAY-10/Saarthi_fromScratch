@@ -13,6 +13,7 @@ Ensures calculations are deterministic and data is drawn directly from Saarthi's
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
@@ -26,37 +27,40 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+DEFAULT_INCOME_SOURCE = "User estimate"
+
+
+def _verified_income(user_id: str) -> Optional[Dict[str, Any]]:
+    """Net monthly pay from the latest verified salary slip in the Document Vault, if any."""
+    for d in vault.latest_versions(user_id):
+        if (d.get("doc_type") or "").upper() != "SALARY_SLIP" or d.get("status") != "VERIFIED":
+            continue
+        try:
+            net_pay = float((d.get("fields") or {}).get("net_pay") or 0)
+        except (TypeError, ValueError):
+            continue
+        if net_pay > 0:
+            return {"monthly_income": net_pay, "income_source": f"Verified from {d.get('name') or 'salary slip'}"}
+    return None
+
+
 def get_or_create_profile(user_id: str) -> Dict[str, Any]:
     row = db.query_one("SELECT * FROM financial_profiles WHERE user_id=?", (user_id,))
     if row:
+        # An estimate the user never edited is upgraded once a verified salary slip lands in the vault.
+        if not row.get("income_verified") and row.get("income_source") == DEFAULT_INCOME_SOURCE:
+            v = _verified_income(user_id)
+            if v:
+                row = {**row, **v, "income_verified": 1, "updated_at": _now_iso()}
+                db.insert("financial_profiles", row)
         return row
 
-    # Try extracting income from verified Document Vault documents (e.g. salary slip)
-    verified_income = None
-    income_source = "User estimate"
-    income_verified = 0
-
-    docs = vault.list_for({"id": user_id})
-    for d in docs:
-        if d.get("doc_type") in ("salary_slip", "bank_statement") and d.get("status") == "VERIFIED":
-            fields = d.get("fields") or {}
-            net_pay = fields.get("net_pay") or fields.get("salary") or fields.get("credit_amount")
-            if net_pay:
-                try:
-                    verified_income = float(net_pay)
-                    income_source = f"Verified from {d.get('name') or d.get('doc_type')}"
-                    income_verified = 1
-                    break
-                except Exception:
-                    pass
-
-    # Default profile values
-    default_income = verified_income or 85000.0
+    v = _verified_income(user_id)
     profile = {
         "user_id": user_id,
-        "monthly_income": default_income,
-        "income_source": income_source,
-        "income_verified": income_verified,
+        "monthly_income": v["monthly_income"] if v else 85000.0,
+        "income_source": v["income_source"] if v else DEFAULT_INCOME_SOURCE,
+        "income_verified": 1 if v else 0,
         "essential_expenses": 32000.0,
         "discretionary_expenses": 12000.0,
         "target_runway_months": 6.0,
@@ -69,18 +73,20 @@ def get_or_create_profile(user_id: str) -> Dict[str, Any]:
 
 def update_profile(user_id: str, updates: Dict[str, Any], reason: str = "User profile update") -> Dict[str, Any]:
     curr = get_or_create_profile(user_id)
+    updates = {k: v for k, v in updates.items() if v is not None}
     prev_income = curr.get("monthly_income")
 
-    new_income = float(updates.get("monthly_income", curr["monthly_income"]))
-    essential = float(updates.get("essential_expenses", curr["essential_expenses"]))
-    discretionary = float(updates.get("discretionary_expenses", curr["discretionary_expenses"]))
-    target_runway = float(updates.get("target_runway_months", curr["target_runway_months"]))
+    new_income = max(0.0, float(updates.get("monthly_income", curr["monthly_income"])))
+    essential = max(0.0, float(updates.get("essential_expenses", curr["essential_expenses"])))
+    discretionary = max(0.0, float(updates.get("discretionary_expenses", curr["discretionary_expenses"])))
+    target_runway = max(1.0, float(updates.get("target_runway_months", curr["target_runway_months"])))
 
+    income_edited = "monthly_income" in updates and new_income != prev_income
     updated = {
         "user_id": user_id,
         "monthly_income": new_income,
-        "income_source": updates.get("income_source", curr["income_source"]),
-        "income_verified": updates.get("income_verified", curr["income_verified"]),
+        "income_source": "User entered" if income_edited else curr["income_source"],
+        "income_verified": 0 if income_edited else curr["income_verified"],
         "essential_expenses": essential,
         "discretionary_expenses": discretionary,
         "target_runway_months": target_runway,
@@ -104,9 +110,25 @@ def update_profile(user_id: str, updates: Dict[str, Any], reason: str = "User pr
     return updated
 
 
+def _next_monthly_due(due_iso: Optional[str], today: date) -> str:
+    try:
+        d = date.fromisoformat((due_iso or "")[:10])
+    except ValueError:
+        return (today + timedelta(days=7)).isoformat()
+    while d < today:
+        d = date(d.year + (1 if d.month == 12 else 0), d.month % 12 + 1, min(d.day, 28))
+    return d.isoformat()
+
+
 def list_liabilities(user_id: str) -> List[Dict[str, Any]]:
     # 1. Stored liabilities
     liabilities = db.query("SELECT * FROM financial_liabilities WHERE user_id=?", (user_id,))
+    today = date.today()
+    for lib in liabilities:
+        rolled = _next_monthly_due(lib.get("next_due_date"), today)
+        if rolled != lib.get("next_due_date"):
+            db.execute("UPDATE financial_liabilities SET next_due_date=? WHERE id=?", (rolled, lib["id"]))
+            lib["next_due_date"] = rolled
 
     # 2. Derive any active loan journeys not yet added to liabilities table
     loan_journeys = db.query(
@@ -137,7 +159,7 @@ def list_liabilities(user_id: str) -> List[Dict[str, Any]]:
             "emi_amount": emi,
             "interest_rate": rate,
             "tenure_months": tenure,
-            "start_date": j.get("created_at")[:10],
+            "start_date": (j.get("created_at") or _now_iso())[:10],
             "next_due_date": (date.today() + timedelta(days=7)).isoformat(),
             "journey_id": j["id"],
             "created_at": _now_iso(),
@@ -166,11 +188,18 @@ def list_goals(user_id: str) -> List[Dict[str, Any]]:
         # Mapped investments
         mappings = db.query("SELECT * FROM goal_investments WHERE goal_id=?", (r["id"],))
 
+        on_track = proj["status"] in ("ON_TRACK", "COMPLETED")
         out.append({
             **r,
             **proj,
+            "lifecycle_status": r.get("status") or "ACTIVE",  # stored ACTIVE / PAUSED; "status" is the projection
             "mappings": mappings,
+            "linked_investments": mappings,
             "mapped_investments_count": len(mappings),
+            "months_remaining": proj["months_left"],
+            "monthly_required": proj["required_monthly_contribution"],
+            "on_track": on_track,
+            "shortfall_projected": 0.0 if on_track else round(max(0.0, proj["contribution_gap"]) * proj["months_left"], 0),
         })
 
     return out
@@ -212,6 +241,7 @@ def update_goal(user_id: str, goal_id: str, updates: Dict[str, Any]) -> Optional
     curr = db.query_one("SELECT * FROM financial_goals WHERE id=? AND user_id=?", (goal_id, user_id))
     if not curr:
         return None
+    updates = {k: v for k, v in updates.items() if v is not None}
 
     prev_contrib = curr.get("monthly_contribution", 0.0)
     new_contrib = float(updates.get("monthly_contribution", prev_contrib))
@@ -264,7 +294,10 @@ def delete_goal(user_id: str, goal_id: str) -> bool:
     return True
 
 
-def link_investment_to_goal(goal_id: str, investment_id: str, investment_type: str, allocated_amount: float) -> Dict[str, Any]:
+def link_investment_to_goal(user_id: str, goal_id: str, investment_id: str, investment_type: str,
+                            allocated_amount: float) -> Optional[Dict[str, Any]]:
+    if not db.query_one("SELECT id FROM financial_goals WHERE id=? AND user_id=?", (goal_id, user_id)):
+        return None
     row = {
         "goal_id": goal_id,
         "investment_id": investment_id,
@@ -291,10 +324,12 @@ def get_upcoming_obligations(user_id: str) -> List[Dict[str, Any]]:
                 "kind": "sip",
                 "amount": float(s["amount"]),
                 "due": due_str,
-                "partner_id": s.get("account", {}).get("bank"),
+                "partner_id": (s.get("account") or {}).get("bank"),
                 "status": "failed" if s.get("journey_status") == "ATTENTION" else "upcoming",
                 "journey_id": s.get("journey_id"),
                 "icon": "sip",
+                "category": "sip",
+                "source": " ".join(filter(None, ["Autopay ·", (s.get("account") or {}).get("bank"), (s.get("account") or {}).get("masked")])),
             })
 
     # 2. Loan EMIs
@@ -313,6 +348,8 @@ def get_upcoming_obligations(user_id: str) -> List[Dict[str, Any]]:
                 "status": "upcoming",
                 "journey_id": lib.get("journey_id"),
                 "icon": "loan",
+                "category": "insurance" if lib.get("kind") == "insurance" else "emi",
+                "recipient": lib.get("lender"),
             })
 
     # 3. Active Insurance journeys
@@ -336,6 +373,8 @@ def get_upcoming_obligations(user_id: str) -> List[Dict[str, Any]]:
                 "status": "upcoming",
                 "journey_id": j["id"],
                 "icon": "shield",
+                "category": "insurance",
+                "recipient": j.get("subtitle"),
             })
 
     return sorted(obligations, key=lambda o: o["due"])
@@ -426,7 +465,7 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
     emis_total = sum(l["emi_amount"] for l in liabilities)
     sips_total = sum(s["amount"] for s in user_sips if s["status"] == "ACTIVE")
     insurance_monthly = sum(ob["amount"] for ob in obligations if ob["kind"] == "insurance") / 12.0
-    planned_goals = sum(g["monthly_contribution"] for g in goals if g["status"] == "ACTIVE")
+    planned_goals = sum(g["monthly_contribution"] for g in goals if g["lifecycle_status"] == "ACTIVE")
 
     cash_flow = engine.calculate_cash_flow(
         monthly_income=profile["monthly_income"],
@@ -437,6 +476,14 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
         discretionary_expenses=profile["discretionary_expenses"],
         planned_goal_contributions=planned_goals,
     )
+    # Aliases the planner UI reads
+    cash_flow.update({
+        "income": cash_flow["monthly_income"],
+        "essential_expenses": cash_flow["fixed_expenses"],
+        "total_expenses": cash_flow["fixed_expenses"] + cash_flow["discretionary_expenses"],
+        "total_obligations": cash_flow["committed_outflow"],
+        "free_cash_flow": cash_flow["estimated_surplus"],
+    })
 
     # 3. Runway & Emergency Fund
     essential_monthly = profile["essential_expenses"] + emis_total
@@ -482,7 +529,7 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
             "type": "EMERGENCY_FUND",
             "level": "warning",
             "title": f"Emergency fund runway is {runway['current_runway_months']} months (Target: {runway['target_months']}m)",
-            "detail": f"Funding gap of ₹{int(runway['funding_gap']):,} to reach 6-month resilience.",
+            "detail": f"Funding gap of ₹{int(runway['funding_gap']):,} to reach {runway['target_months']:g}-month resilience.",
             "action_label": "Fund emergency buffer",
             "action_type": "SIMULATE",
             "action_target": "emergency",
@@ -725,6 +772,7 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
     ]
 
     return {
+        "user_id": user_id,
         "net_worth": net_worth,
         "cash_flow": cash_flow,
         "runway": runway,
@@ -743,4 +791,226 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
         "allocation_gap": allocation_gap,
         "provenance": provenance,
         "profile": profile,
+    }
+
+
+# ---------------------------------------------------------------- simulations
+# Each wraps a deterministic engine call with the user's live numbers and adds the
+# presentation fields the planner UI reads. Engine keys are kept as-is.
+STRESS_TYPES = ("INCOME_DROP_10", "INCOME_DROP_20", "INCOME_ZERO",
+                "UNEXPECTED_EXPENSE_50K", "UNEXPECTED_EXPENSE_1L", "EMI_HIKE_15")
+
+
+def obligations_within(cc: Dict[str, Any], days: int) -> float:
+    cutoff = (date.today() + timedelta(days=days)).isoformat()
+    return sum(o["amount"] for o in cc["obligations"] if o["due"][:10] <= cutoff)
+
+
+def _active_goals(cc: Dict[str, Any]) -> List[Dict[str, Any]]:
+    return [g for g in cc["goals"] if g["lifecycle_status"] == "ACTIVE"]
+
+
+def affordability(user_id: str, amount: float, is_recurring: bool = False, frequency: str = "one_time",
+                  cc: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cc = cc or build_command_center(user_id)
+    frequency = (frequency if frequency in ("monthly", "yearly") else "monthly") if is_recurring else "one_time"
+    surplus = cc["cash_flow"]["estimated_surplus"]
+    sim = engine.simulate_affordability(
+        purchase_amount=amount,
+        is_recurring=is_recurring,
+        frequency=frequency,
+        current_liquid=cc["net_worth"]["asset_breakdown"]["liquid_cash"],
+        monthly_income=cc["profile"]["monthly_income"],
+        monthly_surplus=surplus,
+        essential_monthly_expenses=cc["profile"]["essential_expenses"] + cc["cash_flow"]["emis"],
+        active_goals=_active_goals(cc),
+        upcoming_7d_obligations=obligations_within(cc, 7),
+    )
+    tone = {"AFFORDABLE": "SAFE", "CAUTION": "CAUTION"}.get(sim["verdict"], "HIGH_RISK")
+    label = {"SAFE": "Affordable", "CAUTION": "Affordable with caution", "HIGH_RISK": "High risk right now"}[tone]
+    delayed = [{"goal_name": g["goal_name"], "delay_months": g["projected_delay_months"]}
+               for g in sim["goal_impacts"] if g["projected_delay_months"] > 0]
+
+    recs = list(sim["warnings"])
+    if tone == "SAFE":
+        recs.append(f"Runway stays at {sim['runway_after_months']} months after this purchase.")
+    elif not is_recurring and surplus > 0:
+        months = math.ceil(amount / surplus)
+        recs.append(f"Saving your ₹{int(surplus):,}/mo surplus for {months} month{'s' if months != 1 else ''} "
+                    "would fund this without touching your buffer.")
+    trade_offs = [f"Delays {d['goal_name']} by ~{d['delay_months']} mo" for d in delayed]
+    if sim["surplus_after"] < 0:
+        trade_offs.append(f"Monthly deficit of ₹{abs(int(sim['surplus_after'])):,}")
+
+    return {
+        **sim,
+        "frequency": frequency,
+        "can_afford": tone != "HIGH_RISK",
+        "verdict_tone": tone,
+        "verdict_label": label,
+        "impact_on_runway": {
+            "runway_before_months": sim["runway_before_months"],
+            "runway_after_months": sim["runway_after_months"],
+            "is_safe": sim["runway_after_months"] >= 3.0,
+        },
+        "impact_on_goals": {"affected_goals": delayed},
+        "recommendations": recs,
+        "trade_offs": trade_offs,
+    }
+
+
+def _savings_rate(income: float, sips_amt: float, surplus: float) -> float:
+    return round((sips_amt + max(0.0, surplus)) / income * 100, 1) if income > 0 else 0.0
+
+
+def what_if(user_id: str, income_delta_pct: float = 0.0, sip_delta_abs: float = 0.0,
+            expense_delta_abs: float = 0.0, one_time_expense: float = 0.0,
+            cc: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cc = cc or build_command_center(user_id)
+    cf = cc["cash_flow"]
+    active = _active_goals(cc)
+    sim = engine.simulate_what_if(
+        base_income=cf["monthly_income"],
+        base_fixed_expenses=cf["fixed_expenses"],
+        base_emis=cf["emis"],
+        base_sips=cf["sips"],
+        base_liquid=cc["net_worth"]["asset_breakdown"]["liquid_cash"],
+        active_goals=active,
+        income_delta_pct=income_delta_pct,
+        sip_delta_abs=sip_delta_abs,
+        expense_delta_abs=expense_delta_abs,
+        one_time_expense=one_time_expense,
+        # Same surplus definition as the overview: discretionary, insurance and goal savings also come out.
+        base_other_outflow=cf["discretionary_expenses"] + cf["insurance_monthly"] + cf["planned_goal_contributions"],
+    )
+    base, new = sim["base"], sim["simulated"]
+    base_rate = _savings_rate(base["income"], base["sips"], base["surplus"])
+    new_rate = _savings_rate(new["income"], new["sips"], new["surplus"])
+    new["expenses"] = max(0.0, cf["fixed_expenses"] + expense_delta_abs) + cf["discretionary_expenses"]
+    new["obligations"] = new["expenses"] + cf["emis"] + new["sips"] + cf["insurance_monthly"]
+    new["savings_rate_pct"] = new_rate
+
+    today = date.today()
+    by_id = {g["id"]: g for g in active}
+    impacts = []
+    for gs in sim["goals"]:
+        g = by_id.get(gs["goal_id"], {})
+        delta = gs["months_saved"] or 0.0
+        impacts.append({
+            "goal_id": gs["goal_id"],
+            "goal_name": gs["name"],
+            "target_amount": g.get("target_amount"),
+            "months_remaining": gs["new_months"],
+            "current_target_date": g.get("target_date"),
+            "new_projected_date": (today + timedelta(days=int(gs["new_months"] * 30.4375))).isoformat()
+            if gs["new_months"] else None,
+            "delta_months": abs(delta),
+            "status": "ACCELERATED" if delta > 0 else ("DELAYED" if delta < 0 else "UNCHANGED"),
+        })
+
+    return {
+        **sim,
+        "current": {"surplus": base["surplus"], "runway_months": base["runway_months"], "savings_rate_pct": base_rate},
+        "delta": {
+            "surplus_change": sim["deltas"]["surplus_change"],
+            "runway_change": sim["deltas"]["runway_change_months"],
+            "savings_rate_change": round(new_rate - base_rate, 1),
+        },
+        "goal_impacts": impacts,
+    }
+
+
+def stress_test(user_id: str, stress_type: str, cc: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    cc = cc or build_command_center(user_id)
+    cf = cc["cash_flow"]
+    res = engine.run_stress_test(
+        stress_type=stress_type,
+        monthly_income=cf["monthly_income"],
+        fixed_expenses=cf["fixed_expenses"],
+        emis=cf["emis"],
+        sips=cf["sips"],
+        liquid_funds=cc["net_worth"]["asset_breakdown"]["liquid_cash"],
+        active_goals=_active_goals(cc),
+    )
+
+    # Recovery playbook: concrete levers, largest monthly saving first.
+    deficit = max(0.0, -res["surplus_deficit"])
+    levers = []
+    if deficit > 0 and cf["sips"] > 0:
+        levers.append(("Pause SIPs until income stabilises", cf["sips"]))
+    if deficit > 0 and cf["discretionary_expenses"] > 0:
+        levers.append(("Cut discretionary spending by half", round(cf["discretionary_expenses"] / 2, 0)))
+    if deficit > 0 and cf["planned_goal_contributions"] > 0:
+        levers.append(("Pause goal contributions temporarily", cf["planned_goal_contributions"]))
+    levers.sort(key=lambda x: -x[1])
+
+    playbook, covered = [], 0.0
+    for action, saving in levers:
+        playbook.append({"action": action, "savings_potential": saving,
+                         "priority": "HIGH" if covered < deficit else "MEDIUM"})
+        covered += saving
+    if deficit > 0:
+        playbook.append({"action": f"Bridge any remaining gap from your emergency fund "
+                                   f"({res['survival_runway_months']:g} months of essentials)",
+                         "savings_potential": 0.0, "priority": "HIGH" if covered < deficit else "LOW"})
+    else:
+        playbook.append({"action": res["recommendations"][0], "savings_potential": 0.0, "priority": "LOW"})
+    if res["recovery_months"]:
+        playbook.append({"action": f"Rebuild the emergency buffer from surplus in ~{res['recovery_months']:g} months",
+                         "savings_potential": 0.0, "priority": "MEDIUM"})
+    for i, p in enumerate(playbook, 1):
+        p["step"] = i
+
+    return {
+        **res,
+        "stress_name": res["title"],
+        "test_income": res["tested_income"],
+        "test_expenses": res["tested_essential_outflow"],
+        "test_liquid": res["tested_liquid_funds"],
+        "recovery_playbook": playbook,
+    }
+
+
+def debt_payoff(user_id: str, extra_monthly_payment: float, liability_id: Optional[str] = None,
+                outstanding_balance: Optional[float] = None, current_emi: Optional[float] = None,
+                annual_interest_rate_pct: Optional[float] = None) -> Dict[str, Any]:
+    loans = [l for l in list_liabilities(user_id) if l.get("kind") != "insurance"]
+    if liability_id:
+        lib = next((l for l in loans if l["id"] == liability_id), None)
+    else:
+        lib = max(loans, key=lambda l: l.get("outstanding_amount") or 0.0, default=None)
+
+    # With no loan on record the simulator runs on a sample loan, and says so.
+    illustrative = lib is None and outstanding_balance is None
+    lib = lib or {}
+    balance = outstanding_balance if outstanding_balance is not None else (lib.get("outstanding_amount") or 350000.0)
+    emi = current_emi if current_emi is not None else (lib.get("emi_amount") or 12000.0)
+    rate = annual_interest_rate_pct if annual_interest_rate_pct is not None else (lib.get("interest_rate") or 12.0)
+
+    res = engine.simulate_debt_extra_payment(
+        outstanding_balance=balance,
+        current_emi=emi,
+        annual_interest_rate_pct=rate,
+        extra_monthly_payment=extra_monthly_payment,
+    )
+    return {
+        **res,
+        "liability_id": lib.get("id"),
+        "liability_name": lib.get("name") or ("Sample personal loan" if illustrative else "Loan"),
+        "is_illustrative": illustrative,
+        "baseline": {
+            "total_interest": res["base_total_interest"],
+            "payoff_months": res["base_months_remaining"],
+            "payoff_years": round(res["base_months_remaining"] / 12, 1),
+        },
+        "with_extra": {
+            "total_interest": res["accelerated_total_interest"],
+            "payoff_months": res["accelerated_months_remaining"],
+            "payoff_years": round(res["accelerated_months_remaining"] / 12, 1),
+        },
+        "savings": {
+            "interest_saved": res["interest_saved"],
+            "time_saved_months": res["months_saved"],
+            "time_saved_years": round(res["months_saved"] / 12, 1),
+        },
     }

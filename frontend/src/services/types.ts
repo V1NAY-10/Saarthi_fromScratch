@@ -242,6 +242,7 @@ export interface SystemInfo {
 }
 
 // ---------------------- Financial Planner Types ----------------------
+// Mirrors backend/app/planner/service.py. Keep in sync when the API changes.
 export interface PlannerGoal {
   id: string
   user_id: string
@@ -249,15 +250,22 @@ export interface PlannerGoal {
   category: string
   target_amount: number
   current_amount: number
+  remaining_amount: number
   target_date: string
   monthly_contribution: number
   priority: number
-  status: string
+  /** Projection status from the engine */
+  status: 'ON_TRACK' | 'BEHIND' | 'UNFUNDED' | 'COMPLETED'
+  /** Stored lifecycle status (ACTIVE, PAUSED, ...) */
+  lifecycle_status: string
   notes?: string
-  linked_investments: { investment_id: string; investment_type: string; allocated_amount: number }[]
+  linked_investments: { goal_id: string; investment_id: string; investment_type: string; allocated_amount: number }[]
   months_remaining: number
   progress_pct: number
   monthly_required: number
+  required_monthly_contribution: number
+  contribution_gap: number
+  projected_completion_date: string | null
   on_track: boolean
   shortfall_projected: number
 }
@@ -273,7 +281,7 @@ export interface PlannerHealthFactor {
 
 export interface PlannerHealthScore {
   overall: number
-  band: 'EXCELLENT' | 'HEALTHY' | 'MODERATE' | 'VULNERABLE' | 'CRITICAL'
+  band: 'EXCELLENT' | 'HEALTHY' | 'MODERATE' | 'VULNERABLE'
   factors: PlannerHealthFactor[]
 }
 
@@ -290,14 +298,21 @@ export interface PlannerEmergencyFund {
 
 export interface PlannerCashFlow {
   income: number
+  monthly_income: number
   essential_expenses: number
+  fixed_expenses: number
   discretionary_expenses: number
   total_expenses: number
   emis: number
   sips: number
+  insurance_monthly: number
+  planned_goal_contributions: number
+  committed_outflow: number
   total_obligations: number
+  total_outflow: number
   estimated_surplus: number
   savings_rate_pct: number
+  debt_to_income_pct: number
   free_cash_flow: number
 }
 
@@ -324,10 +339,21 @@ export interface PlannerObligation {
   title: string
   amount: number
   due: string
-  category: string
+  kind: 'sip' | 'emi' | 'insurance'
+  category: 'sip' | 'emi' | 'insurance'
   status: string
   recipient?: string
   source?: string
+  journey_id?: string | null
+}
+
+export interface PlannerCollisionWindow {
+  window_days: number
+  obligations_count: number
+  total_obligations: number
+  available_liquidity: number
+  shortfall: number
+  has_collision: boolean
 }
 
 export interface PlannerRecommendation {
@@ -344,12 +370,14 @@ export interface PlannerRecommendation {
 export interface PlannerOverview {
   user_id: string
   profile: {
+    user_id: string
     monthly_income: number
+    income_source: string
+    income_verified: number
     essential_expenses: number
     discretionary_expenses: number
     target_runway_months: number
-    risk_tolerance: string
-    retirement_age: number
+    emergency_fund_target: number
   }
   net_worth: PlannerNetWorth
   cash_flow: PlannerCashFlow
@@ -363,6 +391,10 @@ export interface PlannerOverview {
   goals: PlannerGoal[]
   recommendations: PlannerRecommendation[]
   obligations: PlannerObligation[]
+  collisions: {
+    has_collision: boolean
+    windows: Record<'7d' | '30d' | '90d', PlannerCollisionWindow>
+  }
   auto_budget: {
     needs_pct: number
     wants_pct: number
@@ -375,11 +407,14 @@ export interface PlannerOverview {
 
 export interface AffordabilityResult {
   can_afford: boolean
-  verdict: string
+  verdict: 'AFFORDABLE' | 'CAUTION' | 'HIGH_RISK'
+  verdict_label: string
   verdict_tone: 'SAFE' | 'CAUTION' | 'HIGH_RISK'
   purchase_amount: number
   is_recurring: boolean
   frequency: string
+  liquid_after: number
+  warnings: string[]
   impact_on_runway: {
     runway_before_months: number
     runway_after_months: number
@@ -415,15 +450,16 @@ export interface WhatIfResult {
     goal_id: string
     goal_name: string
     target_amount: number
-    months_remaining: number
+    months_remaining: number | null
     current_target_date: string
-    new_projected_date: string
+    new_projected_date: string | null
     delta_months: number
     status: 'ACCELERATED' | 'DELAYED' | 'UNCHANGED'
   }[]
 }
 
 export interface StressTestResult {
+  stress_type: string
   stress_name: string
   test_income: number
   test_expenses: number
@@ -440,6 +476,12 @@ export interface StressTestResult {
 }
 
 export interface DebtPayoffResult {
+  liability_id: string | null
+  liability_name: string
+  is_illustrative: boolean
+  amortizes: boolean
+  outstanding_balance: number
+  current_emi: number
   baseline: {
     total_interest: number
     payoff_months: number
@@ -458,11 +500,19 @@ export interface DebtPayoffResult {
 }
 
 export interface PlanChangeLog {
-  id: string
+  id: number
   user_id: string
-  version: number
+  ts: string
   change_type: string
-  description: string
-  created_at: string
+  previous_val: string
+  new_val: string
+  reason: string
+  impact_summary: string
+  affected_goals: string[] | null
 }
 
+export interface PlannerChatReply {
+  reply: string
+  agent_mode: 'gemini' | 'deterministic'
+  simulation: AffordabilityResult | null
+}

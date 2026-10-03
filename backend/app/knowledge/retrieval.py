@@ -20,12 +20,12 @@ import re
 import threading
 from collections import Counter
 
-from app.config import BASE_DIR
+from app.config import DATA_DIR
 from app.knowledge import registry
 
 log = logging.getLogger("saarthi.rag")
 DATASET = "saarthi_kb"
-STATE_FILE = BASE_DIR / ".cognee_state.json"
+STATE_FILE = DATA_DIR / ".cognee_state.json"
 
 _TOKEN = re.compile(r"[a-z0-9_]+")
 _STOP = {"the", "a", "an", "of", "to", "and", "or", "is", "in", "for", "be", "on", "by", "with", "it", "as", "that",

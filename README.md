@@ -305,6 +305,7 @@ Full interactive docs: http://localhost:8000/docs. Every user-scoped call sends 
 | Journeys | `GET /api/journeys` · `GET /api/journeys/{id}` · `GET /api/journeys/{id}/agent` · `POST …/diagnose` · `POST …/decide` · `POST …/recover` · `POST …/approve` · `POST …/escalate` |
 | Saarthi | `GET /api/overview` · `POST /api/chat` · `GET /api/audit` · `GET /api/system` · `POST /api/demo/reset` |
 | Knowledge | `GET /api/knowledge` · `GET /api/knowledge/search?q=` |
+| Financial planner | `GET /api/planner/overview` · `POST /api/planner/profile` · `GET/POST /api/planner/goals` · `PUT/DELETE /api/planner/goals/{id}` · `POST /api/planner/affordability` · `POST /api/planner/what-if` · `POST /api/planner/stress-test` · `POST /api/planner/debt/extra-payment` · `POST /api/planner/chat` · `GET /api/planner/changelog` · `POST /api/planner/demo/scenario/{1-7}` |
 | Partner sandbox | `GET /partner/{pid}/journey/{ref}` · `POST /partner/{pid}/diagnose` · `POST /partner/{pid}/retry` · `POST /partner/{pid}/update-status` |
 
 ---
@@ -315,13 +316,36 @@ Full interactive docs: http://localhost:8000/docs. Every user-scoped call sends 
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DEMO_MODE` | `false` | `true` forces the deterministic planner (offline, no key needed) |
+| `DEMO_MODE` | `true` if unset (`.env.example` sets `false`) | `true` forces the deterministic planner (offline, no key needed) |
 | `GEMINI_API_KEY` | empty | Required for the Gemini agent. Get one at https://aistudio.google.com/app/apikey |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Gemini model for the agent, explanations and chat |
 | `LLM_PROVIDER` | `gemini` | Always `gemini` |
-| `SAARTHI_DB` | `backend/saarthi.db` | SQLite path |
+| `SAARTHI_DATA_DIR` | `backend/` | Writable state: SQLite DB, `uploads/`, signing secret. Mount a volume here in production |
+| `SAARTHI_DB` | `$SAARTHI_DATA_DIR/saarthi.db` | SQLite path |
+| `SAARTHI_STORAGE_SECRET` | generated into the data dir | HMAC secret for signed document URLs. Set it explicitly in production |
+| `SAARTHI_FRONTEND_DIST` | `frontend/dist` | Built web app. When it exists the backend serves it at `/` |
+| `CORS_ORIGINS` | `*` | Comma-separated origins, only needed when the frontend is hosted on another domain |
+| `CLOUDINARY_URL` | empty | Store documents in Cloudinary instead of local disk (`pip install cloudinary`) |
+
+Variables already set in the environment take precedence over `backend/.env`.
 
 The engine panel shows which planner is active. Any Gemini error (including API overload) falls back to the deterministic planner mid-run without losing completed steps.
+
+### Deploying
+
+The repo ships a `Dockerfile` that builds the frontend and serves it together with the API from one container, so there is a single URL and no CORS setup:
+
+```bash
+docker build -t saarthi .
+docker run -p 8000:8000 -v saarthi-data:/data \
+  -e DEMO_MODE=false -e GEMINI_API_KEY=your_key -e SAARTHI_STORAGE_SECRET=$(openssl rand -hex 32) \
+  saarthi
+# open http://localhost:8000
+```
+
+This works on any Docker host (Render, Railway, Fly.io, Cloud Run, a VM). The container listens on `$PORT` (default 8000), exposes `/api/health` for health checks, and keeps all state in `/data`. Attach a persistent volume there, or the database and uploaded documents reset on every deploy. Run a single instance: the app uses SQLite and runs agent work in-process.
+
+Without Docker: `cd frontend && npm ci && npm run build`, then `cd backend && pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8000`.
 
 ---
 

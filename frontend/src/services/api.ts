@@ -1,6 +1,6 @@
 import type {
   Account, AffordabilityResult, AuditEntry, ChatReply, DebtPayoffResult, Decision, Fund, Journey, JourneyView, KnowledgeEntry,
-  Overview, PartnerOffer, PlanChangeLog, PlannerGoal, PlannerObligation, PlannerOverview, Precheck, Profile, Scenario,
+  Overview, PartnerOffer, PlanChangeLog, PlannerGoal, PlannerObligation, PlannerChatReply, PlannerOverview, Precheck, Profile, Scenario,
   Sip, SipStartResult, StressTestResult, SystemInfo, VaultDocument, WhatIfResult,
 } from './types'
 
@@ -91,14 +91,14 @@ export const api = {
   reset: () => post<{ ok: boolean }>('/api/demo/reset'),
   // financial planner
   plannerOverview: () => req<PlannerOverview>('/api/planner/overview'),
-  plannerUpdateProfile: (b: Partial<PlannerOverview['profile']>) => post<PlannerOverview>('/api/planner/profile', b),
+  plannerUpdateProfile: (b: Partial<Pick<PlannerOverview['profile'], 'monthly_income' | 'essential_expenses' | 'discretionary_expenses' | 'target_runway_months'>>) => post<PlannerOverview>('/api/planner/profile', b),
   plannerGoals: () => req<PlannerGoal[]>('/api/planner/goals'),
   plannerCreateGoal: (b: { name: string; category?: string; target_amount: number; current_amount?: number; target_date: string; monthly_contribution?: number; priority?: number; notes?: string }) =>
     post<PlannerGoal>('/api/planner/goals', b),
   plannerUpdateGoal: (id: string, b: Partial<PlannerGoal>) => put<PlannerGoal>(`/api/planner/goals/${id}`, b),
   plannerDeleteGoal: (id: string) => del<{ ok: boolean }>(`/api/planner/goals/${id}`),
   plannerLinkGoal: (goalId: string, b: { investment_id: string; investment_type?: string; allocated_amount: number }) =>
-    post<PlannerGoal>(`/api/planner/goals/${goalId}/link`, b),
+    post<PlannerGoal['linked_investments'][number]>(`/api/planner/goals/${goalId}/link`, b),
   plannerUpcoming: () => req<PlannerObligation[]>('/api/planner/upcoming'),
   plannerCalendar: () => req<any>('/api/planner/calendar'),
   plannerChangelog: (limit = 20) => req<PlanChangeLog[]>(`/api/planner/changelog?limit=${limit}`),
@@ -110,6 +110,6 @@ export const api = {
     post<StressTestResult>('/api/planner/stress-test', b),
   plannerDebtPayoff: (b: { liability_id?: string; outstanding_balance?: number; current_emi?: number; annual_interest_rate_pct?: number; extra_monthly_payment: number }) =>
     post<DebtPayoffResult>('/api/planner/debt/extra-payment', b),
-  plannerChat: (message: string) => post<{ reply: string; data?: any }>('/api/planner/chat', { message }),
-  plannerLoadScenario: (scenarioId: number) => post<{ ok: boolean; scenario: any }>(`/api/planner/demo/scenario/${scenarioId}`),
+  plannerChat: (message: string) => post<PlannerChatReply>('/api/planner/chat', { message }),
+  plannerLoadScenario: (scenarioId: number) => post<{ scenario: number; title: string; description?: string }>(`/api/planner/demo/scenario/${scenarioId}`),
 }

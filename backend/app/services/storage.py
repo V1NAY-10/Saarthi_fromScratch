@@ -20,10 +20,10 @@ import time
 import uuid
 from pathlib import Path
 
-from app.config import BASE_DIR
+from app.config import DATA_DIR
 
 log = logging.getLogger("saarthi.storage")
-_SECRET_FILE = BASE_DIR / ".storage_secret"
+_SECRET_FILE = DATA_DIR / ".storage_secret"
 
 
 def _secret() -> bytes:
@@ -46,9 +46,9 @@ def verify_signature(version_id: str, expires: int, sig: str) -> bool:
 class LocalStorage:
     name = "local"
 
-    def __init__(self, root: Path = BASE_DIR / "uploads"):
+    def __init__(self, root: Path = DATA_DIR / "uploads"):
         self.root = root
-        self.root.mkdir(exist_ok=True)
+        self.root.mkdir(parents=True, exist_ok=True)
 
     def upload(self, user_id: str, data: bytes, filename: str, mime: str) -> dict:
         ext = Path(filename).suffix.lower()[:8] or ".bin"

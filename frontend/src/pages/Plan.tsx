@@ -44,13 +44,32 @@ const GOAL_PRESETS = [
   { name: 'Financial Freedom / Retirement', category: 'wealth', target_amount: 10000000, target_date: '2045-12-31', monthly: 30000 },
 ]
 
+// Real fund ids from the seeded catalogue
+const GOAL_FUND_ID = 'f-nimbus-bluechip'
+const LIQUID_FUND_ID = 'f-yamuna-debt'
+
+const SCENARIOS = [
+  { id: 1, label: '1. Cash-flow collision' },
+  { id: 2, label: '2. Car goal behind' },
+  { id: 6, label: '3. Active loan EMI' },
+  { id: 7, label: '4. Verified salary slip' },
+]
+
+function daysUntil(iso: string): number {
+  const d = new Date(iso.slice(0, 10) + 'T00:00:00')
+  const now = new Date()
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  return Math.round((d.getTime() - today.getTime()) / 86400000)
+}
+
 export function Plan() {
   const { push, bump, showToast } = useApp()
   const [subtab, setSubtab] = useState<SubTab>('overview')
   const [simType, setSimType] = useState<SimType>('affordability')
 
-  const { data: plan, reload: reloadPlan } = useData(() => api.plannerOverview())
-  const { data: changelog } = useData(() => api.plannerChangelog(10))
+  const { data: plan, reload: reloadPlanOverview } = useData(() => api.plannerOverview())
+  const { data: changelog, reload: reloadChangelog } = useData(() => api.plannerChangelog(10))
+  const reloadPlan = () => { reloadPlanOverview(); reloadChangelog() }
 
   // Goal Creation Sheet state
   const [showAddGoal, setShowAddGoal] = useState(false)
@@ -95,29 +114,23 @@ export function Plan() {
   // Scenario loading state
   const [loadingScenario, setLoadingScenario] = useState<number | null>(null)
 
-  // Initial trigger for simulators
+  // (Re)run the simulators with the current inputs whenever the plan data changes
   useEffect(() => {
-    if (plan && !affordResult) {
-      runAffordabilityCheck('75000', false, 'one_time', 'electronics')
-    }
-    if (plan && !whatIfResult) {
-      runWhatIfSimulation(0, 5000, 0)
-    }
-    if (plan && !stressResult) {
-      runStressTestSimulation('INCOME_DROP_20')
-    }
-    if (plan && !debtResult) {
-      runDebtSimulation(5000)
-    }
+    if (!plan) return
+    runAffordabilityCheck(affordAmount, affordRecurring, affordRecurring ? 'monthly' : 'one_time', 'general')
+    runWhatIfSimulation(incomeDelta, sipDelta, expenseDelta)
+    runStressTestSimulation(stressScenario)
+    runDebtSimulation(extraPayment)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [plan])
 
   async function handleLoadScenario(id: number) {
     setLoadingScenario(id)
     try {
-      await api.plannerLoadScenario(id)
+      const res = await api.plannerLoadScenario(id)
       bump()
       reloadPlan()
-      showToast(`Demo Scenario ${id} loaded!`)
+      showToast(`Loaded: ${res.title}`)
     } catch (e) {
       showToast((e as Error).message)
     } finally {
@@ -272,6 +285,9 @@ export function Plan() {
   const nw = plan.net_worth
   const score = plan.health_score.overall
   const runwayPct = Math.min(100, Math.round((ef.current_runway_months / Math.max(1, ef.target_runway_months)) * 100))
+  const pctOfIncome = (v: number) => (cf.income > 0 ? (v / cf.income) * 100 : 0)
+  const collision30 = plan.collisions.windows['30d']
+  const obligations30 = plan.obligations.filter(o => daysUntil(o.due) <= 30)
 
   return (
     <div>
@@ -394,7 +410,7 @@ export function Plan() {
                   <b>{inr(ef.current_liquid)}</b>
                 </div>
                 <div>
-                  <span className="muted">Required (6 mo): </span>
+                  <span className="muted">Required ({ef.target_runway_months} mo): </span>
                   <b>{inr(ef.recommended_corpus)}</b>
                 </div>
               </div>
@@ -402,7 +418,7 @@ export function Plan() {
               {ef.gap > 0 && (
                 <div className="saarthi-strip" style={{ marginTop: 12 }}>
                   <div className="t">
-                    <b>Saarthi Insight:</b> Allocating ₹{(ef.gap / 6).toFixed(0)}/mo to liquid funds fills this safety gap in 6 months.
+                    <b>Saarthi Insight:</b> Allocating {inr(ef.gap / 6)}/mo to liquid funds fills this safety gap in 6 months.
                   </div>
                 </div>
               )}
@@ -447,12 +463,12 @@ export function Plan() {
                 <div className="fact">
                   <div className="k">Fixed + EMI</div>
                   <div className="v">{inr(cf.essential_expenses + cf.emis)}</div>
-                  <div className="src">{((cf.essential_expenses + cf.emis) / cf.income * 100).toFixed(0)}% of income</div>
+                  <div className="src">{pctOfIncome(cf.essential_expenses + cf.emis).toFixed(0)}% of income</div>
                 </div>
                 <div className="fact">
                   <div className="k">SIPs / Invested</div>
                   <div className="v">{inr(cf.sips)}</div>
-                  <div className="src">{cf.sips > 0 ? `${(cf.sips / cf.income * 100).toFixed(0)}% invested` : 'None active'}</div>
+                  <div className="src">{cf.sips > 0 ? `${pctOfIncome(cf.sips).toFixed(0)}% invested` : 'None active'}</div>
                 </div>
                 <div className="fact emph" style={{ background: cf.free_cash_flow >= 0 ? 'var(--ok-soft)' : 'var(--bad-soft)', borderColor: cf.free_cash_flow >= 0 ? '#bbf7d0' : '#fecaca' }}>
                   <div className="k" style={{ color: cf.free_cash_flow >= 0 ? 'var(--ok)' : 'var(--bad)' }}>Free Cash Flow</div>
@@ -507,38 +523,17 @@ export function Plan() {
               </div>
               <div className="hint">Simulate different financial profiles instantly to observe engine recalculations:</div>
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 6, marginTop: 8 }}>
-                <button
-                  className="btn btn-ghost"
-                  style={{ height: 32, fontSize: 11 }}
-                  disabled={loadingScenario !== null}
-                  onClick={() => handleLoadScenario(1)}
-                >
-                  1. Young Pro (Surplus)
-                </button>
-                <button
-                  className="btn btn-ghost"
-                  style={{ height: 32, fontSize: 11 }}
-                  disabled={loadingScenario !== null}
-                  onClick={() => handleLoadScenario(2)}
-                >
-                  2. Family with EMI
-                </button>
-                <button
-                  className="btn btn-ghost"
-                  style={{ height: 32, fontSize: 11 }}
-                  disabled={loadingScenario !== null}
-                  onClick={() => handleLoadScenario(3)}
-                >
-                  3. Low Runway Shock
-                </button>
-                <button
-                  className="btn btn-ghost"
-                  style={{ height: 32, fontSize: 11 }}
-                  disabled={loadingScenario !== null}
-                  onClick={() => handleLoadScenario(4)}
-                >
-                  4. High Net Worth
-                </button>
+                {SCENARIOS.map(s => (
+                  <button
+                    key={s.id}
+                    className="btn btn-ghost"
+                    style={{ height: 32, fontSize: 11 }}
+                    disabled={loadingScenario !== null}
+                    onClick={() => handleLoadScenario(s.id)}
+                  >
+                    {s.label}
+                  </button>
+                ))}
               </div>
             </div>
           </div>
@@ -647,7 +642,7 @@ export function Plan() {
                   <div style={{ fontWeight: 700, fontSize: 13.5, color: 'var(--brand-ink)' }}>Accelerate your goal funding</div>
                   <div className="muted" style={{ fontSize: 11.5, marginTop: 2 }}>Explore top-rated mutual funds to match your goal horizon</div>
                 </div>
-                <button className="btn btn-primary" style={{ height: 32, fontSize: 11.5 }} onClick={() => push({ name: 'fund', id: 'f-largecap' })}>
+                <button className="btn btn-primary" style={{ height: 32, fontSize: 11.5 }} onClick={() => push({ name: 'fund', id: GOAL_FUND_ID })}>
                   Explore Funds
                 </button>
               </div>
@@ -768,7 +763,7 @@ export function Plan() {
                         ) : (
                           <AlertTriangle size={18} />
                         )}
-                        <b style={{ fontSize: 14 }}>{affordResult.verdict}</b>
+                        <b style={{ fontSize: 14 }}>{affordResult.verdict_label}</b>
                       </div>
                       <span className="pill" style={{ background: 'rgba(0,0,0,0.06)', fontSize: 10 }}>
                         {affordResult.verdict_tone}
@@ -788,7 +783,7 @@ export function Plan() {
 
                     {affordResult.recommendations.length > 0 && (
                       <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px dashed rgba(0,0,0,0.1)', fontSize: 11.5 }}>
-                        <b>Saarthi Advice:</b> {affordResult.recommendations[0]}
+                        <b>Saarthi Advice:</b> {affordResult.recommendations.join(' ')}
                       </div>
                     )}
                   </div>
@@ -986,7 +981,7 @@ export function Plan() {
                             <div className="grow">
                               <div style={{ fontWeight: 600 }}>{p.action}</div>
                               <div className="muted" style={{ fontSize: 11 }}>
-                                Saves ~{inr(p.savings_potential)}/mo · Priority: {p.priority}
+                                {p.savings_potential > 0 && <>Saves ~{inr(p.savings_potential)}/mo · </>}Priority: {p.priority}
                               </div>
                             </div>
                           </div>
@@ -1030,6 +1025,20 @@ export function Plan() {
                 </div>
 
                 {debtResult && (
+                  <div className="muted" style={{ fontSize: 11.5, marginTop: 10 }}>
+                    {debtResult.is_illustrative
+                      ? `You have no active loans - showing a sample ${inr(debtResult.outstanding_balance)} loan at ${inr(debtResult.current_emi)}/mo EMI.`
+                      : `${debtResult.liability_name}: ${inr(debtResult.outstanding_balance)} outstanding at ${inr(debtResult.current_emi)}/mo EMI.`}
+                  </div>
+                )}
+
+                {debtResult && !debtResult.amortizes && (
+                  <div className="saarthi-strip" style={{ marginTop: 10 }}>
+                    <div className="t">The current EMI doesn't cover the monthly interest, so this loan never pays down. Talk to your lender about restructuring.</div>
+                  </div>
+                )}
+
+                {debtResult && debtResult.amortizes && (
                   <div className="card card-pad" style={{ marginTop: 14, background: 'var(--surface-2)' }}>
                     <div className="between">
                       <span className="eyebrow">Debt Free Sooner</span>
@@ -1089,8 +1098,8 @@ export function Plan() {
                         className="btn btn-soft"
                         style={{ height: 26, fontSize: 11, padding: '0 8px' }}
                         onClick={() => {
-                          if (r.actionable_journey === 'invest') push({ name: 'fund', id: 'f-largecap' })
-                          else if (r.actionable_journey === 'loan') push({ name: 'apply', kind: 'personal_loan' })
+                          if (r.actionable_journey === 'invest') push({ name: 'fund', id: r.id === 'rec-runway' ? LIQUID_FUND_ID : GOAL_FUND_ID })
+                          else if (r.actionable_journey === 'loan') { setSubtab('simulators'); setSimType('debt') }
                           else showToast(`Action initiated: ${r.suggested_action}`)
                         }}
                       >
@@ -1199,11 +1208,12 @@ export function Plan() {
                 </div>
                 <div className="stack" style={{ gap: 6, marginTop: 8 }}>
                   {changelog.map(c => (
-                    <div key={c.id} className="between" style={{ fontSize: 11.5, padding: '4px 0', borderBottom: '1px solid var(--line-2)' }}>
+                    <div key={c.id} className="between" style={{ fontSize: 11.5, padding: '4px 0', borderBottom: '1px solid var(--line-2)', gap: 8 }}>
                       <div>
-                        <b>v{c.version.toFixed(1)}</b> · {c.description}
+                        <b>{c.reason}</b>
+                        <div className="muted" style={{ fontSize: 10.5 }}>{c.previous_val} → {c.new_val} · {c.impact_summary}</div>
                       </div>
-                      <span className="muted" style={{ fontSize: 10 }}>{relDay(c.created_at)}</span>
+                      <span className="muted" style={{ fontSize: 10, whiteSpace: 'nowrap' }}>{relDay(c.ts)}</span>
                     </div>
                   ))}
                 </div>
@@ -1220,16 +1230,18 @@ export function Plan() {
                 <div className="section-title">Upcoming Obligations</div>
                 <div className="muted" style={{ fontSize: 11.5 }}>Next 30 days commitments vs liquid buffer</div>
               </div>
-              <span className="pill pill-ok">Buffer Protected</span>
+              {collision30.has_collision
+                ? <span className="pill pill-bad">{inr(collision30.shortfall)} short</span>
+                : <span className="pill pill-ok">Buffer Protected</span>}
             </div>
 
             <div className="card">
-              {plan.obligations.length === 0 ? (
+              {obligations30.length === 0 ? (
                 <div style={{ padding: 20, textAlign: 'center', color: 'var(--ink-3)', fontSize: 13 }}>
                   No obligations scheduled in the next 30 days.
                 </div>
               ) : (
-                plan.obligations.map(o => (
+                obligations30.map(o => (
                   <div key={o.id} className="list-row">
                     <div className="cat-icon cat-investment" style={{ width: 34, height: 34, fontSize: 14 }}>
                       {o.category === 'sip' ? '📈' : o.category === 'emi' ? '🏦' : '📄'}
@@ -1249,7 +1261,10 @@ export function Plan() {
 
             <div className="saarthi-strip">
               <div className="t">
-                <b>Total 30-Day Commitments:</b> {inr(plan.obligations.reduce((acc, x) => acc + x.amount, 0))}. Your liquid balance of {inr(ef.current_liquid)} provides 100% safe coverage.
+                <b>Total 30-Day Commitments:</b> {inr(collision30.total_obligations)}.{' '}
+                {collision30.has_collision
+                  ? `Your liquid balance of ${inr(ef.current_liquid)} falls ${inr(collision30.shortfall)} short - top up or reschedule before the due dates.`
+                  : `Your liquid balance of ${inr(ef.current_liquid)} covers them in full.`}
               </div>
             </div>
           </div>
