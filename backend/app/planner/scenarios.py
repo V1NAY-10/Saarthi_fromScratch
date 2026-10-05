@@ -18,7 +18,7 @@ from typing import Any, Dict
 from app.database import db
 from app.planner import service
 from app.product import vault
-from app.product.journeys import NotFound, ProductError
+from app.product.journeys import NotFound
 
 SCENARIO_IDS = range(1, 8)
 
@@ -164,23 +164,42 @@ def load_scenario(user_id: str, scenario_id: int) -> Dict[str, Any]:
     elif scenario_id == 6:
         # Scenario 6: Active loan journey integrated into financial plan
         # Ensure a loan journey exists for user
-        j = db.query_one("SELECT * FROM journeys WHERE user_id=? AND category='loan'", (user_id,))
-        if not j:
-            from app.product import applications
-            acc = db.query_one("SELECT * FROM accounts WHERE user_id=? AND status='VERIFIED'", (user_id,))
-            if not acc:
-                raise ProductError("Link a verified bank account first - the loan needs a payout account.")
-            user = db.query_one("SELECT * FROM users WHERE id=?", (user_id,))
-            applications.start(user, "vistara_finance", {
-                "amount": 350000.0,
-                "tenure_months": 36,
-                "monthly_income": 75000.0,
-                "account_id": acc["id"],
+        # A personal loan disbursed four months ago: shows up as debt, a monthly EMI and a lower surplus.
+        if not db.query_one("SELECT id FROM financial_liabilities WHERE user_id=? AND kind='personal_loan'", (user_id,)):
+            from app.product.applications import OFFERS, _emi
+            rate, principal, months = OFFERS["vistara_finance"]["rate"], 350000.0, 36
+            emi = _emi(principal, rate, months)
+            balance, r = principal, rate / 1200
+            for _ in range(4):  # four EMIs already paid
+                balance -= emi - balance * r
+            db.insert("financial_liabilities", {
+                "id": f"lib-{uuid.uuid4().hex[:8]}",
+                "user_id": user_id,
+                "name": "Personal Loan",
+                "lender": "Vistara Finance",
+                "kind": "personal_loan",
+                "total_amount": principal,
+                "outstanding_amount": round(balance, 0),
+                "emi_amount": emi,
+                "interest_rate": rate,
+                "tenure_months": months,
+                "start_date": (today - timedelta(days=122)).isoformat(),
+                "next_due_date": (today + timedelta(days=12)).isoformat(),
+                "journey_id": None,
+                "created_at": service._now_iso(),
             })
+            service.log_plan_change(
+                user_id=user_id,
+                change_type="LIABILITY_ADDED",
+                prev_val="No loans",
+                new_val=f"Personal loan · ₹{int(emi):,}/mo EMI",
+                reason="Loaded demo: active personal loan",
+                impact_summary=f"₹{int(balance):,} outstanding now counts against net worth and monthly surplus.",
+            )
         return {
             "scenario": 6,
-            "title": "Loan Journey Integrated in Plan",
-            "description": "Active loan journey automatically surfaces in the Financial Planner as committed liability, upcoming EMI obligations, and impact on monthly surplus.",
+            "title": "Active Loan in Your Plan",
+            "description": "A disbursed personal loan appears as debt, a monthly EMI on the calendar and a lower surplus.",
         }
 
     elif scenario_id == 7:

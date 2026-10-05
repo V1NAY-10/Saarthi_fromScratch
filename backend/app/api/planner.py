@@ -85,6 +85,7 @@ class ProfileUpdateBody(BaseModel):
     essential_expenses: Optional[float] = Field(default=None, ge=0)
     discretionary_expenses: Optional[float] = Field(default=None, ge=0)
     target_runway_months: Optional[float] = Field(default=None, ge=1, le=36)
+    salary_day: Optional[int] = Field(default=None, ge=1, le=28)
 
 
 class ChatBody(BaseModel):
@@ -127,6 +128,18 @@ def delete_goal(goal_id: str, user=Depends(current_user)):
     if not ok:
         raise HTTPException(404, "Goal not found")
     return {"ok": True}
+
+
+class GoalTopUpBody(BaseModel):
+    amount: float = Field(gt=0, le=1e9)
+
+
+@router.post("/goals/{goal_id}/add-money")
+def add_money(goal_id: str, body: GoalTopUpBody, user=Depends(current_user)):
+    res = service.add_money_to_goal(user["id"], goal_id, body.amount)
+    if not res:
+        raise HTTPException(404, "Goal not found")
+    return res
 
 
 @router.post("/goals/{goal_id}/link")

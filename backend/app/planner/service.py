@@ -65,6 +65,7 @@ def get_or_create_profile(user_id: str) -> Dict[str, Any]:
         "discretionary_expenses": 12000.0,
         "target_runway_months": 6.0,
         "emergency_fund_target": 32000.0 * 6.0,
+        "salary_day": 1,
         "updated_at": _now_iso(),
     }
     db.insert("financial_profiles", profile)
@@ -80,6 +81,7 @@ def update_profile(user_id: str, updates: Dict[str, Any], reason: str = "User pr
     essential = max(0.0, float(updates.get("essential_expenses", curr["essential_expenses"])))
     discretionary = max(0.0, float(updates.get("discretionary_expenses", curr["discretionary_expenses"])))
     target_runway = max(1.0, float(updates.get("target_runway_months", curr["target_runway_months"])))
+    salary_day = min(28, max(1, int(updates.get("salary_day", curr.get("salary_day") or 1))))
 
     income_edited = "monthly_income" in updates and new_income != prev_income
     updated = {
@@ -91,6 +93,7 @@ def update_profile(user_id: str, updates: Dict[str, Any], reason: str = "User pr
         "discretionary_expenses": discretionary,
         "target_runway_months": target_runway,
         "emergency_fund_target": essential * target_runway,
+        "salary_day": salary_day,
         "updated_at": _now_iso(),
     }
     db.insert("financial_profiles", updated)
@@ -130,11 +133,16 @@ def list_liabilities(user_id: str) -> List[Dict[str, Any]]:
             db.execute("UPDATE financial_liabilities SET next_due_date=? WHERE id=?", (rolled, lib["id"]))
             lib["next_due_date"] = rolled
 
-    # 2. Derive any active loan journeys not yet added to liabilities table
+    # 2. Derive liabilities from loan journeys - only once the money was actually disbursed.
+    #    An application still collecting documents is not debt.
     loan_journeys = db.query(
-        "SELECT * FROM journeys WHERE user_id=? AND category='loan' AND status IN ('ON_TRACK', 'RESOLVED', 'COMPLETE')",
-        (user_id,)
+        "SELECT * FROM journeys WHERE user_id=? AND category='loan' AND stage='Disbursed'", (user_id,)
     )
+    disbursed = {j["id"] for j in loan_journeys}
+    stale = [l for l in liabilities if l.get("journey_id") and l["journey_id"] not in disbursed]
+    for l in stale:  # rows an older version derived from undisbursed applications
+        db.execute("DELETE FROM financial_liabilities WHERE id=?", (l["id"],))
+    liabilities = [l for l in liabilities if l not in stale]
     existing_jids = {l.get("journey_id") for l in liabilities if l.get("journey_id")}
 
     for j in loan_journeys:
@@ -155,7 +163,7 @@ def list_liabilities(user_id: str) -> List[Dict[str, Any]]:
             "lender": j.get("subtitle") or "Lender",
             "kind": "personal_loan",
             "total_amount": amt,
-            "outstanding_amount": amt * 0.85,  # illustrative paid-down balance
+            "outstanding_amount": amt,  # freshly disbursed: full principal outstanding
             "emi_amount": emi,
             "interest_rate": rate,
             "tenure_months": tenure,
@@ -277,6 +285,25 @@ def update_goal(user_id: str, goal_id: str, updates: Dict[str, Any]) -> Optional
     return row
 
 
+def add_money_to_goal(user_id: str, goal_id: str, amount: float) -> Optional[Dict[str, Any]]:
+    curr = db.query_one("SELECT * FROM financial_goals WHERE id=? AND user_id=?", (goal_id, user_id))
+    if not curr:
+        return None
+    new_amount = round(float(curr["current_amount"] or 0.0) + amount, 2)
+    db.update("financial_goals", "id", goal_id, {"current_amount": new_amount, "updated_at": _now_iso()})
+    remaining = max(0.0, float(curr["target_amount"]) - new_amount)
+    log_plan_change(
+        user_id=user_id,
+        change_type="GOAL_TOPUP",
+        prev_val=f"₹{int(curr['current_amount'] or 0):,}",
+        new_val=f"₹{int(new_amount):,}",
+        reason=f"Added money to {curr['name']}",
+        impact_summary="Goal fully funded!" if remaining <= 0 else f"₹{int(remaining):,} left to reach the target.",
+        affected_goals=[goal_id],
+    )
+    return next((g for g in list_goals(user_id) if g["id"] == goal_id), None)
+
+
 def delete_goal(user_id: str, goal_id: str) -> bool:
     curr = db.query_one("SELECT * FROM financial_goals WHERE id=? AND user_id=?", (goal_id, user_id))
     if not curr:
@@ -354,7 +381,7 @@ def get_upcoming_obligations(user_id: str) -> List[Dict[str, Any]]:
 
     # 3. Active Insurance journeys
     ins_journeys = db.query(
-        "SELECT * FROM journeys WHERE user_id=? AND category='insurance' AND status IN ('ON_TRACK', 'RESOLVED', 'COMPLETE')",
+        "SELECT * FROM journeys WHERE user_id=? AND category='insurance' AND stage='Policy issued'",
         (user_id,)
     )
     for j in ins_journeys:
@@ -493,6 +520,23 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
         target_months=profile["target_runway_months"],
     )
 
+    # 3b. Safe-to-spend until payday, and the 30-day balance forecast
+    profile = {**profile, "salary_day": int(profile.get("salary_day") or 1)}
+    pulse = engine.calculate_safe_to_spend(
+        liquid_balance=liquid_cash,
+        upcoming_obligations=obligations,
+        essential_monthly_expenses=profile["essential_expenses"],
+        discretionary_monthly=profile["discretionary_expenses"],
+        salary_day=profile["salary_day"],
+    )
+    forecast = engine.forecast_balance(
+        liquid_balance=liquid_cash,
+        upcoming_obligations=obligations,
+        monthly_income=profile["monthly_income"],
+        monthly_living_costs=profile["essential_expenses"] + profile["discretionary_expenses"],
+        salary_day=profile["salary_day"],
+    )
+
     # 4. Collisions
     collisions = engine.detect_cash_flow_collisions(
         liquid_balance=liquid_cash,
@@ -519,7 +563,21 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
             "detail": f"Upcoming obligations total ₹{int(c_7d['total_obligations']):,} against available bank balance of ₹{int(liquid_cash):,}.",
             "action_label": "Review obligations",
             "action_type": "NAVIGATE_TAB",
-            "action_target": "cashflow",
+            "action_target": "calendar",
+        })
+
+    # Projected balance dips below zero within the forecast window
+    if forecast["first_negative_date"] and not c_7d.get("has_collision"):
+        attention_cards.append({
+            "id": "attn-forecast-negative",
+            "type": "FORECAST_NEGATIVE",
+            "level": "critical",
+            "title": f"Balance projected to run out on {date.fromisoformat(forecast['first_negative_date']):%d %b}",
+            "detail": f"At your usual spending, debits and living costs outrun income; the lowest point is "
+                      f"₹{int(forecast['lowest']['balance']):,} on {date.fromisoformat(forecast['lowest']['date']):%d %b}.",
+            "action_label": "See forecast",
+            "action_type": "NAVIGATE_TAB",
+            "action_target": "calendar",
         })
 
     # Check emergency fund below target
@@ -528,7 +586,7 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
             "id": "attn-emergency-fund",
             "type": "EMERGENCY_FUND",
             "level": "warning",
-            "title": f"Emergency fund runway is {runway['current_runway_months']} months (Target: {runway['target_months']}m)",
+            "title": f"Emergency fund covers {runway['current_runway_months']:g} of {runway['target_months']:g} months",
             "detail": f"Funding gap of ₹{int(runway['funding_gap']):,} to reach {runway['target_months']:g}-month resilience.",
             "action_label": "Fund emergency buffer",
             "action_type": "SIMULATE",
@@ -543,7 +601,7 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
                 "type": "GOAL_BEHIND",
                 "level": "warning",
                 "title": f"{g['name']} is ₹{int(g['contribution_gap']):,}/month behind schedule",
-                "detail": f"Currently contributing ₹{int(g['current_monthly_contribution']):,}/mo. Needs ₹{int(g['required_monthly_contribution']):,}/mo to hit target by {g['target_date']}.",
+                "detail": f"Currently contributing ₹{int(g['current_monthly_contribution']):,}/mo. Needs ₹{int(g['required_monthly_contribution']):,}/mo to reach it by {date.fromisoformat(g['target_date'][:10]):%b %Y}.",
                 "action_label": "Adjust contribution",
                 "action_type": "EDIT_GOAL",
                 "action_target": g["id"],
@@ -623,7 +681,11 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
         debt_score = 12
     else:
         debt_score = 5
-    debt_status = "EXCELLENT" if debt_score >= 22 else ("GOOD" if debt_score >= 18 else "NEEDS_WORK")
+    # EMIs can be affordable while debt still outweighs everything owned: cap the score then.
+    debt_exceeds_assets = net_worth["total_liabilities"] > net_worth["total_assets"]
+    if debt_exceeds_assets:
+        debt_score = min(debt_score, 10)
+    debt_status = "EXCELLENT" if debt_score >= 22 else ("GOOD" if debt_score >= 18 else ("NEEDS_WORK" if debt_score >= 10 else "CRITICAL"))
 
     sav_rate = cash_flow.get("savings_rate_pct", 0.0)
     if sav_rate >= 30:
@@ -666,7 +728,7 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
                 "score": debt_score,
                 "max_score": 25,
                 "status": debt_status,
-                "comment": f"EMIs consume {dti:.0f}% of monthly income.",
+                "comment": f"EMIs consume {dti:.0f}% of income" + (", but debt exceeds what you own." if debt_exceeds_assets else "."),
             },
             {
                 "key": "savings",
@@ -783,6 +845,8 @@ def build_command_center(user_id: str) -> Dict[str, Any]:
         "recommendations": recommendations,
         "insights": insights,
         "collisions": collisions,
+        "pulse": pulse,
+        "forecast": forecast,
         "goals": goals,
         "liabilities": liabilities,
         "obligations": obligations,

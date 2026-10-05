@@ -1,9 +1,24 @@
+// Keeps a minus sign on the same line as the amount it belongs to
+const WORD_JOINER = String.fromCharCode(0x2060)
+
 export function inr(n: number | null | undefined, opts: { decimals?: boolean } = {}): string {
   if (n === null || n === undefined || Number.isNaN(n)) return '—'
-  return '₹' + n.toLocaleString('en-IN', {
+  const sign = n < 0 && Math.abs(n) >= (opts.decimals ? 0.005 : 0.5) ? '−' + WORD_JOINER : ''
+  return sign + '₹' + Math.abs(n).toLocaleString('en-IN', {
     minimumFractionDigits: opts.decimals ? 2 : 0,
     maximumFractionDigits: opts.decimals ? 2 : 0,
   })
+}
+
+/** Short Indian notation for tight spaces: ₹950, ₹45k, ₹1.2L, ₹2.5Cr */
+export function inrShort(n: number): string {
+  const sign = n < 0 ? '−' + WORD_JOINER : ''
+  const a = Math.abs(n)
+  const fmt = (v: number) => (v >= 10 ? v.toFixed(0) : v.toFixed(1).replace(/\.0$/, ''))
+  if (a >= 1e7) return `${sign}₹${fmt(a / 1e7)}Cr`
+  if (a >= 1e5) return `${sign}₹${fmt(a / 1e5)}L`
+  if (a >= 1e3) return `${sign}₹${fmt(a / 1e3)}k`
+  return `${sign}₹${a.toFixed(0)}`
 }
 
 export function time(iso: string): string {

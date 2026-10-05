@@ -356,6 +356,40 @@ export interface PlannerCollisionWindow {
   has_collision: boolean
 }
 
+export interface PlannerPulse {
+  per_day: number
+  total_until_payday: number
+  next_payday: string
+  days_to_payday: number
+  liquid_balance: number
+  committed_before_payday: number
+  committed_items: number
+  essentials_reserved: number
+  safety_buffer: number
+  usual_daily_spend: number
+  status: 'HEALTHY' | 'TIGHT' | 'OVERCOMMITTED'
+}
+
+export interface PlannerForecast {
+  days: number
+  start_balance: number
+  end_balance: number
+  lowest: { date: string; balance: number }
+  first_negative_date: string | null
+  points: { date: string; balance: number; events: { title: string; amount: number; kind: string }[] }[]
+}
+
+export interface PlannerAttentionCard {
+  id: string
+  type: string
+  level: 'critical' | 'warning' | 'info'
+  title: string
+  detail: string
+  action_label: string
+  action_type: 'NAVIGATE_TAB' | 'SIMULATE' | 'EDIT_GOAL' | 'OPEN_JOURNEY'
+  action_target: string
+}
+
 export interface PlannerRecommendation {
   id: string
   category: string
@@ -378,7 +412,11 @@ export interface PlannerOverview {
     discretionary_expenses: number
     target_runway_months: number
     emergency_fund_target: number
+    salary_day: number
   }
+  pulse: PlannerPulse
+  forecast: PlannerForecast
+  attention_cards: PlannerAttentionCard[]
   net_worth: PlannerNetWorth
   cash_flow: PlannerCashFlow
   health_score: PlannerHealthScore

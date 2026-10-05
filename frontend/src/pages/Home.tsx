@@ -1,15 +1,18 @@
 import { motion } from 'framer-motion'
-import { Bell, CalendarClock, CheckCircle2, ChevronRight, Eye, EyeOff, Info, Landmark, Plus, TrendingUp, TriangleAlert } from 'lucide-react'
+import { Bell, Calculator, CalendarClock, CheckCircle2, ChevronRight, Eye, EyeOff, FolderLock, HandCoins, Info, Landmark, Repeat, ShieldCheck, Target, TrendingUp, TriangleAlert } from 'lucide-react'
 
 import { useState } from 'react'
 import { AttentionCard, issueCopy } from '../components/journey'
 import { BankLogo, CategoryIcon, SaarthiMark, Skeleton } from '../components/ui'
-import { useApp } from '../hooks/useApp'
+import { SafeToSpendCard } from '../features/planner/widgets'
+import { useApp, useData } from '../hooks/useApp'
+import { api } from '../services/api'
 import { dueLabel, greeting, inr } from '../services/format'
 
 export function Home() {
   const { overview: o, push, setTab } = useApp()
   const [hidden, setHidden] = useState(false)
+  const { data: plan } = useData(() => api.plannerOverview())
   if (!o) return <div className="page"><Skeleton h={180} /><Skeleton h={60} /><Skeleton h={140} /></div>
 
   const first = o.user.name.split(' ')[0]
@@ -36,7 +39,7 @@ export function Home() {
             <button onClick={() => setHidden(h => !h)} style={{ color: '#fff', opacity: 0.8 }} aria-label="Toggle balance">{hidden ? <EyeOff size={16} /> : <Eye size={16} />}</button>
           </div>
           <div className="amt num">{mask(inr(o.cash))}</div>
-          <div className="lbl" style={{ marginTop: 2 }}>Investments {mask(inr(o.portfolio_value))} · Net worth {mask(inr(o.net_worth))}</div>
+          <div className="lbl" style={{ marginTop: 2 }}>Investments {mask(inr(o.portfolio_value))} · Net worth {mask(inr(plan?.net_worth.net_worth ?? o.net_worth))}</div>
           {o.accounts.length > 0 && (
             <div className="balance-split">
               {o.accounts.slice(0, 3).map(a => (
@@ -49,15 +52,31 @@ export function Home() {
           )}
         </div>
 
-        <div className="quick">
-          {[
-            { l: 'Invest', I: TrendingUp, f: () => setTab('invest') },
-            { l: 'Loans', I: Plus, f: () => setTab('loans') },
-            { l: 'Banks', I: Landmark, f: () => push({ name: 'banks' }) },
-          ].map(({ l, I, f }) => (
-            <button key={l} onClick={f}><span className="qi"><I size={20} /></span>{l}</button>
-          ))}
+        <div className="svc-card">
+          <div className="svc-title">Money services</div>
+          <div className="svc-grid">
+            {[
+              { l: 'Mutual Funds', I: TrendingUp, f: () => setTab('invest') },
+              { l: 'Start SIP', I: Repeat, f: () => setTab('invest') },
+              { l: 'Personal Loan', I: HandCoins, f: () => push({ name: 'apply', kind: 'loan' }) },
+              { l: 'Health Cover', I: ShieldCheck, f: () => push({ name: 'apply', kind: 'insurance' }) },
+              { l: 'Money Plan', I: Target, f: () => setTab('plan') },
+              { l: 'Can I Afford?', I: Calculator, f: () => setTab('plan'), isNew: true },
+              { l: 'Doc Vault', I: FolderLock, f: () => push({ name: 'vault' }) },
+              { l: 'Bank Accounts', I: Landmark, f: () => push({ name: 'banks' }) },
+            ].map(({ l, I, f, isNew }) => (
+              <button key={l} onClick={f}>
+                <span className="si"><I size={20} />{isNew && <span className="new">NEW</span>}</span>{l}
+              </button>
+            ))}
+          </div>
         </div>
+
+        {plan && o.accounts.length > 0 && (
+          <div className="section">
+            <SafeToSpendCard pulse={plan.pulse} onOpen={() => setTab('plan')} />
+          </div>
+        )}
 
         {nextStep && (
           <div className="section">

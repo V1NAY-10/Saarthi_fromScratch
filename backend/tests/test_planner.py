@@ -251,3 +251,43 @@ def test_what_if_other_outflow_reduces_surplus_not_runway():
     with_other = engine.simulate_what_if(**kw, base_other_outflow=12000.0)
     assert with_other["base"]["surplus"] == plain["base"]["surplus"] - 12000.0
     assert with_other["base"]["runway_months"] == plain["base"]["runway_months"]
+
+
+def test_next_payday_rolls_to_next_month():
+    assert engine.next_payday(1, date(2026, 10, 3)) == date(2026, 11, 1)
+    assert engine.next_payday(25, date(2026, 10, 3)) == date(2026, 10, 25)
+    assert engine.next_payday(5, date(2026, 12, 5)) == date(2027, 1, 5)
+
+
+def test_safe_to_spend_reserves_commitments_before_payday():
+    today = date(2026, 10, 3)
+    obligations = [
+        {"amount": 8000.0, "due": "2026-10-10"},   # before payday: reserved
+        {"amount": 12000.0, "due": "2026-11-05"},  # after payday: ignored
+    ]
+    res = engine.calculate_safe_to_spend(
+        liquid_balance=100000.0, upcoming_obligations=obligations, essential_monthly_expenses=30000.0,
+        discretionary_monthly=15000.0, salary_day=1, as_of=today,
+    )
+    assert res["days_to_payday"] == 29
+    assert res["committed_before_payday"] == 8000.0
+    # 100000 - 8000 - essentials(29 days of 30000/30) - buffer(7500)
+    assert res["total_until_payday"] == 100000.0 - 8000.0 - 29000.0 - 7500.0
+    assert res["status"] == "HEALTHY"
+
+    broke = engine.calculate_safe_to_spend(5000.0, obligations, 30000.0, 15000.0, 1, today)
+    assert broke["status"] == "OVERCOMMITTED" and broke["per_day"] == 0
+
+
+def test_forecast_balance_applies_debits_and_salary():
+    today = date(2026, 10, 3)
+    fc = engine.forecast_balance(
+        liquid_balance=50000.0, upcoming_obligations=[{"amount": 20000.0, "due": "2026-10-05", "title": "EMI"}],
+        monthly_income=90000.0, monthly_living_costs=30000.0, salary_day=1, days=30, as_of=today,
+    )
+    assert len(fc["points"]) == 31
+    # day 2: two days of living costs and the EMI
+    assert fc["points"][2]["balance"] == 50000.0 - 2000.0 - 20000.0
+    nov1 = next(p for p in fc["points"] if p["date"] == "2026-11-01")
+    assert any(e["kind"] == "income" for e in nov1["events"])
+    assert fc["first_negative_date"] is None

@@ -12,6 +12,7 @@ export type Route =
   | { name: 'apply'; kind: string; partnerId?: string }
   | { name: 'banks' }
   | { name: 'profile' }
+  | { name: 'vault' }
 
 interface ChatState { open: boolean; journeyId?: string; preset?: string }
 

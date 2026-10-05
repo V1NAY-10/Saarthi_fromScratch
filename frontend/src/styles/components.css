@@ -467,3 +467,69 @@
 .rec-card.medium { border-left-color: var(--warn); }
 .rec-card.low { border-left-color: var(--ok); }
 
+/* ── Safe to spend ── */
+.sts-card { position: relative; display: block; width: 100%; text-align: left; border-radius: var(--r-xl); padding: 16px 16px 14px; background: var(--surface); border: 1px solid var(--line-2); box-shadow: var(--sh-2); overflow: hidden; }
+.sts-card::before { content: ''; position: absolute; inset: 0 0 auto 0; height: 4px; background: var(--saarthi); }
+.sts-eyebrow { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+.sts-tag { font-size: 10.5px; font-weight: 700; padding: 3px 8px; border-radius: var(--r-pill); }
+.sts-tag.ok { background: var(--ok-soft); color: var(--ok); }
+.sts-tag.warn { background: var(--warn-soft); color: var(--warn); }
+.sts-tag.bad { background: var(--bad-soft); color: var(--bad); }
+.sts-amount { font-family: var(--font-display); font-size: 32px; font-weight: 800; letter-spacing: -0.02em; color: var(--ink); margin-top: 6px; line-height: 1.1; }
+.sts-amount span { font-size: 14px; font-weight: 600; color: var(--ink-3); margin-left: 3px; letter-spacing: 0; }
+.sts-sub { font-size: 12px; color: var(--ink-2); margin-top: 3px; }
+.sts-split { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
+.sts-split .k { font-size: 10.5px; color: var(--ink-3); font-weight: 500; }
+.sts-split .v { font-size: 13px; font-weight: 700; color: var(--ink); margin-top: 1px; }
+.sts-chev { position: absolute; right: 14px; top: 46px; color: var(--ink-4); }
+
+/* ── Needs-attention feed ── */
+.attn-feed { display: flex; flex-direction: column; gap: 8px; }
+.attn-item { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; padding: 12px; border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--line-2); box-shadow: var(--sh-1); }
+.attn-item .attn-ic { width: 30px; height: 30px; border-radius: 10px; display: grid; place-items: center; flex-shrink: 0; background: var(--brand-soft); color: var(--brand); }
+.attn-item.critical .attn-ic { background: var(--bad-soft); color: var(--bad); }
+.attn-item.warning .attn-ic { background: var(--warn-soft); color: var(--warn); }
+.attn-item .t { display: block; font-size: 13px; font-weight: 700; color: var(--ink); line-height: 1.3; }
+.attn-item .d { display: block; font-size: 11.5px; color: var(--ink-2); margin-top: 2px; line-height: 1.35; }
+.attn-item .a { display: inline-flex; align-items: center; gap: 2px; font-size: 11.5px; font-weight: 700; color: var(--brand); margin-top: 6px; }
+
+/* ── 30-day forecast ── */
+.fc-head { display: flex; justify-content: space-between; gap: 12px; }
+.fc-k { font-size: 10.5px; font-weight: 600; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.05em; }
+.fc-v { font-size: 18px; font-weight: 800; color: var(--ink); font-family: var(--font-display); margin-top: 2px; }
+.fc-v.neg { color: var(--bad); }
+.fc-s { font-size: 11px; color: var(--ink-3); }
+.fc-plot { position: relative; margin-top: 10px; }
+.fc-svg { width: 100%; height: auto; display: block; touch-action: pan-y; cursor: crosshair; overflow: visible; }
+.fc-label { font-size: 10px; font-weight: 700; fill: var(--ink-2); font-family: var(--font); }
+.fc-axis { display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-3); margin-top: 2px; padding: 0 2px; }
+.fc-tip { position: absolute; top: -6px; transform: translate(-50%, -100%); background: var(--ink); color: #fff; font-size: 11px; padding: 6px 9px; border-radius: 9px; white-space: nowrap; pointer-events: none; z-index: 2; box-shadow: var(--sh-2); }
+.fc-ev { font-size: 10.5px; color: #c9d3e2; margin-top: 2px; }
+.fc-ev.in { color: #86efac; }
+.fc-legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 10.5px; color: var(--ink-2); margin-top: 8px; }
+.fc-legend span { display: inline-flex; align-items: center; gap: 5px; }
+.fc-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.fc-alert { display: flex; align-items: center; gap: 6px; margin-top: 10px; padding: 8px 10px; border-radius: 10px; background: var(--bad-soft); color: var(--bad); font-size: 12px; font-weight: 600; }
+
+/* ── Goal actions ── */
+.goal-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
+.goal-actions .btn { height: 34px; font-size: 12px; }
+.goal-sheet-head { padding: 12px 14px; border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line-2); }
+.goal-sheet-head .t { font-weight: 700; font-size: 14px; }
+.goal-sheet-head .s { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.amount-input { height: 54px; font-size: 22px; font-weight: 700; font-family: var(--font-display); }
+
+/* ── Home services grid ── */
+.svc-card { margin-top: 14px; padding: 14px 6px 6px; border-radius: var(--r-xl); background: var(--surface); border: 1px solid var(--line-2); box-shadow: var(--sh-1); }
+.svc-card .svc-title { font-size: 13px; font-weight: 700; padding: 0 10px 4px; }
+.svc-grid { display: grid; grid-template-columns: repeat(4, 1fr); row-gap: 6px; }
+.svc-grid button { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 8px 2px; font-size: 11px; font-weight: 600; color: var(--ink-2); line-height: 1.2; text-align: center; border-radius: 12px; }
+.svc-grid button:active { background: var(--surface-2); }
+.svc-grid .si { width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); position: relative; }
+.svc-grid .si .new { position: absolute; top: -4px; right: -10px; font-size: 8.5px; font-weight: 800; background: var(--bad); color: #fff; padding: 1px 5px; border-radius: 6px; letter-spacing: 0.04em; }
+
+/* ── Planner header strip ── */
+.plan-strip { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--ink-3); }
+.plan-strip .live { display: inline-flex; align-items: center; gap: 6px; }
+.plan-strip .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+

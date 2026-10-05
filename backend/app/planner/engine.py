@@ -550,3 +550,119 @@ def simulate_debt_extra_payment(
         "interest_saved": interest_saved,
         "amortizes": True,
     }
+
+
+def next_payday(salary_day: int, today: date) -> date:
+    """The next salary credit strictly after today (salary_day is clamped to 1-28)."""
+    day = min(max(int(salary_day or 1), 1), 28)
+    candidate = today.replace(day=day)
+    if candidate <= today:
+        candidate = date(today.year + (1 if today.month == 12 else 0), today.month % 12 + 1, day)
+    return candidate
+
+
+def _due(ob: Dict[str, Any]) -> Optional[date]:
+    try:
+        return date.fromisoformat((ob.get("due") or ob.get("due_date") or "")[:10])
+    except ValueError:
+        return None
+
+
+def calculate_safe_to_spend(
+    liquid_balance: float,
+    upcoming_obligations: List[Dict[str, Any]],
+    essential_monthly_expenses: float,
+    discretionary_monthly: float,
+    salary_day: int = 1,
+    as_of: Optional[date] = None,
+) -> Dict[str, Any]:
+    """How much can be spent per day until the next salary credit without missing a commitment.
+
+    Sets aside every SIP/EMI/premium due before payday, the essential living costs for the
+    remaining days, and a one-week safety buffer; whatever is left is spendable."""
+    today = as_of or date.today()
+    payday = next_payday(salary_day, today)
+    days_left = max(1, (payday - today).days)
+
+    due_before = [ob for ob in upcoming_obligations if (d := _due(ob)) and today <= d < payday]
+    committed = sum(float(ob.get("amount") or 0.0) for ob in due_before)
+    essentials = round(essential_monthly_expenses / 30.0 * days_left, 0)
+    buffer = round(essential_monthly_expenses / 4.0, 0)
+
+    spendable = max(0.0, liquid_balance - committed - essentials - buffer)
+    per_day = round(spendable / days_left, 0)
+    usual_per_day = discretionary_monthly / 30.0 if discretionary_monthly > 0 else 0.0
+
+    if liquid_balance < committed:
+        status = "OVERCOMMITTED"
+    elif spendable <= 0 or (usual_per_day and per_day < usual_per_day * 0.5):
+        status = "TIGHT"
+    else:
+        status = "HEALTHY"
+
+    return {
+        "per_day": per_day,
+        "total_until_payday": round(spendable, 0),
+        "next_payday": payday.isoformat(),
+        "days_to_payday": days_left,
+        "liquid_balance": liquid_balance,
+        "committed_before_payday": committed,
+        "committed_items": len(due_before),
+        "essentials_reserved": essentials,
+        "safety_buffer": buffer,
+        "usual_daily_spend": round(usual_per_day, 0),
+        "status": status,
+    }
+
+
+def forecast_balance(
+    liquid_balance: float,
+    upcoming_obligations: List[Dict[str, Any]],
+    monthly_income: float,
+    monthly_living_costs: float,
+    salary_day: int = 1,
+    days: int = 30,
+    as_of: Optional[date] = None,
+) -> Dict[str, Any]:
+    """Day-by-day projected bank balance: living costs spread evenly, scheduled debits on their
+    due dates, salary on payday. Flags the lowest point and the first day it goes negative."""
+    today = as_of or date.today()
+    pay_day = min(max(int(salary_day or 1), 1), 28)
+    daily_cost = monthly_living_costs / 30.0
+    by_day: Dict[date, List[Dict[str, Any]]] = {}
+    for ob in upcoming_obligations:
+        d = _due(ob)
+        if d and today <= d <= today + timedelta(days=days):
+            by_day.setdefault(d, []).append(ob)
+
+    bal = liquid_balance
+    points = []
+    low = None
+    first_negative = None
+    for i in range(days + 1):
+        d = today + timedelta(days=i)
+        events = []
+        if i > 0:
+            bal -= daily_cost
+            if d.day == pay_day and monthly_income > 0:
+                bal += monthly_income
+                events.append({"title": "Salary credit", "amount": monthly_income, "kind": "income"})
+        for ob in by_day.get(d, []):
+            amt = float(ob.get("amount") or 0.0)
+            bal -= amt
+            events.append({"title": ob.get("title") or "Debit", "amount": -amt, "kind": ob.get("kind") or "debit"})
+        point = {"date": d.isoformat(), "balance": round(bal, 0), "events": events}
+        points.append(point)
+        if low is None or bal < low["balance"]:
+            low = point
+        if first_negative is None and bal < 0:
+            first_negative = d.isoformat()
+
+    return {
+        "days": days,
+        "start_balance": liquid_balance,
+        "end_balance": points[-1]["balance"],
+        "lowest": {"date": low["date"], "balance": low["balance"]},
+        "first_negative_date": first_negative,
+        "points": points,
+    }

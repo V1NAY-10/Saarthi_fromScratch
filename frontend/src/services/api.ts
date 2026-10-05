@@ -91,12 +91,13 @@ export const api = {
   reset: () => post<{ ok: boolean }>('/api/demo/reset'),
   // financial planner
   plannerOverview: () => req<PlannerOverview>('/api/planner/overview'),
-  plannerUpdateProfile: (b: Partial<Pick<PlannerOverview['profile'], 'monthly_income' | 'essential_expenses' | 'discretionary_expenses' | 'target_runway_months'>>) => post<PlannerOverview>('/api/planner/profile', b),
+  plannerUpdateProfile: (b: Partial<Pick<PlannerOverview['profile'], 'monthly_income' | 'essential_expenses' | 'discretionary_expenses' | 'target_runway_months' | 'salary_day'>>) => post<PlannerOverview>('/api/planner/profile', b),
   plannerGoals: () => req<PlannerGoal[]>('/api/planner/goals'),
   plannerCreateGoal: (b: { name: string; category?: string; target_amount: number; current_amount?: number; target_date: string; monthly_contribution?: number; priority?: number; notes?: string }) =>
     post<PlannerGoal>('/api/planner/goals', b),
   plannerUpdateGoal: (id: string, b: Partial<PlannerGoal>) => put<PlannerGoal>(`/api/planner/goals/${id}`, b),
   plannerDeleteGoal: (id: string) => del<{ ok: boolean }>(`/api/planner/goals/${id}`),
+  plannerAddMoney: (goalId: string, amount: number) => post<PlannerGoal>(`/api/planner/goals/${goalId}/add-money`, { amount }),
   plannerLinkGoal: (goalId: string, b: { investment_id: string; investment_type?: string; allocated_amount: number }) =>
     post<PlannerGoal['linked_investments'][number]>(`/api/planner/goals/${goalId}/link`, b),
   plannerUpcoming: () => req<PlannerObligation[]>('/api/planner/upcoming'),

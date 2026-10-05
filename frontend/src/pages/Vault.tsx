@@ -19,14 +19,14 @@ export function DocStatus({ status }: { status: string }) {
 }
 
 export function Vault() {
-  const { push, overview } = useApp()
+  const { push, pop, stack, overview } = useApp()
   const { data } = useData(() => api.documents())
   const [upload, setUpload] = useState(false)
   const [open, setOpen] = useState<VaultDocument | null>(null)
   const issues = data?.filter(d => ['EXPIRED', 'MISMATCH', 'UNREADABLE', 'EXPIRING_SOON', 'NEEDS_REVIEW'].includes(d.status)) ?? []
   return (
     <div>
-      <TopBar title="Document Vault" sub="Upload once, reuse across every journey"
+      <TopBar title="Document Vault" sub="Upload once, reuse across every journey" onBack={stack.length ? pop : undefined}
         right={<button className="icon-btn" onClick={() => setUpload(true)} aria-label="Add document"><Plus size={18} /></button>} />
       <div className="page">
         <div className="card card-pad card-saarthi row" style={{ gap: 12 }}>

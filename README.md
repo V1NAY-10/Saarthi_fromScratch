@@ -166,6 +166,15 @@ Either way, tiers and actions are always deterministic — Gemini can only *prop
 - **Profile → Failure knowledge:** learned outcome counts start at zero and grow as you resolve incidents
 - **Demo Scenarios** button in the engine panel: one-click setup for any scenario
 
+### Money Plan (Plan tab)
+- **Safe to spend today:** a per-day spending limit until your next salary. It already sets aside every SIP, EMI and premium due before payday, your essential costs and a one-week buffer. Also shown on Home.
+- **30-day balance forecast:** day-by-day projected balance with salary credits, scheduled debits and usual spending. It marks the lowest point and warns if the balance would run out. Tap the chart for details.
+- **Needs your attention:** cash-flow collisions, a thin emergency fund, goals falling behind and a negative forecast, each with a one-tap fix.
+- **Goals:** add money, change the monthly saving and see the new completion date before saving.
+- **Simulators:** "Can I afford it?", what-if sliders, stress tests (job loss, ₹1L emergency, EMI hike) and loan prepayment.
+- **Edit income & expenses** (pencil icon): income, essentials, lifestyle spend, payday and emergency-fund target. Everything recalculates.
+- Ask the planner chat *"How much can I spend today?"* or *"Can I afford a ₹1.5L trip?"*
+
 ---
 
 ## 4. What's real and what's simulated

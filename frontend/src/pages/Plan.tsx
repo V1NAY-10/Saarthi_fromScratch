@@ -1,33 +1,45 @@
 import {
   AlertTriangle,
   Bot,
+  Car,
   Calendar,
   CheckCircle2,
   ChevronRight,
   Compass,
-  DollarSign,
   Flame,
   FlaskConical,
+  GraduationCap,
   History,
+  Landmark,
+  House,
+  IndianRupee,
   Layers,
   Link as LinkIcon,
   Loader2,
+  Pencil,
+  PiggyBank,
+  Plane,
   Plus,
   Send,
   Shield,
   ShieldAlert,
+  ShieldCheck,
   Sparkles,
   Target,
   Trash2,
+  TrendingUp,
   Zap
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { HealthRing, Sheet, Skeleton, TopBar } from '../components/ui'
 import { useApp, useData } from '../hooks/useApp'
 import { api } from '../services/api'
-import { inr, relDay } from '../services/format'
+import { dueLabel, inr, relDay } from '../services/format'
+import { AttentionFeed, ForecastChart, GoalActionSheet, ProfileSheet, SafeToSpendCard } from '../features/planner/widgets'
 import type {
   AffordabilityResult,
+  PlannerAttentionCard,
+  PlannerGoal,
   DebtPayoffResult,
   StressTestResult,
   WhatIfResult
@@ -43,6 +55,13 @@ const GOAL_PRESETS = [
   { name: 'Child Higher Education', category: 'education', target_amount: 2000000, target_date: '2032-03-31', monthly: 20000 },
   { name: 'Financial Freedom / Retirement', category: 'wealth', target_amount: 10000000, target_date: '2045-12-31', monthly: 30000 },
 ]
+
+const GOAL_ICONS: Record<string, typeof Target> = {
+  emergency: Shield, home: House, house: House, travel: Plane, education: GraduationCap, car: Car, vehicle: Car, wealth: Sparkles,
+}
+
+const monthYear = (iso: string) =>
+  new Date(iso.slice(0, 10) + 'T00:00:00').toLocaleDateString('en-IN', { month: 'short', year: 'numeric' })
 
 // Real fund ids from the seeded catalogue
 const GOAL_FUND_ID = 'f-nimbus-bluechip'
@@ -73,6 +92,8 @@ export function Plan() {
 
   // Goal Creation Sheet state
   const [showAddGoal, setShowAddGoal] = useState(false)
+  const [showProfile, setShowProfile] = useState(false)
+  const [goalSheet, setGoalSheet] = useState<{ goal: PlannerGoal; mode: 'add' | 'edit' } | null>(null)
   const [newGoalName, setNewGoalName] = useState('')
   const [newGoalCategory, setNewGoalCategory] = useState('custom')
   const [newGoalTarget, setNewGoalTarget] = useState('')
@@ -135,6 +156,22 @@ export function Plan() {
       showToast((e as Error).message)
     } finally {
       setLoadingScenario(null)
+    }
+  }
+
+  function afterSave(msg: string) {
+    bump()
+    reloadPlan()
+    showToast(msg)
+  }
+
+  function handleAttention(c: PlannerAttentionCard) {
+    if (c.action_type === 'NAVIGATE_TAB') setSubtab(c.action_target as SubTab)
+    else if (c.action_type === 'OPEN_JOURNEY') push({ name: 'journey', id: c.action_target })
+    else if (c.action_type === 'SIMULATE') push({ name: 'fund', id: LIQUID_FUND_ID })
+    else if (c.action_type === 'EDIT_GOAL') {
+      const g = plan?.goals.find(x => x.id === c.action_target)
+      if (g) setGoalSheet({ goal: g, mode: 'edit' })
     }
   }
 
@@ -292,12 +329,12 @@ export function Plan() {
   return (
     <div>
       <TopBar
-        title="Financial Plan"
-        sub="Dynamic Command Center · Auto-synced"
+        title="Money Plan"
+        sub={`${plan.profile.income_verified ? 'Verified income' : 'Estimated income'} ${inr(plan.profile.monthly_income)}/mo · payday ${plan.profile.salary_day}${plan.profile.salary_day === 1 ? 'st' : plan.profile.salary_day === 2 ? 'nd' : plan.profile.salary_day === 3 ? 'rd' : 'th'}`}
         right={
-          <div className="chip code-chip" style={{ fontSize: 11 }}>
-            v{plan.active_plan.version.toFixed(1)}
-          </div>
+          <button className="icon-btn" aria-label="Edit income and expenses" onClick={() => setShowProfile(true)}>
+            <Pencil size={16} />
+          </button>
         }
       />
 
@@ -317,13 +354,22 @@ export function Plan() {
             <span className="row" style={{ gap: 5 }}><Sparkles size={14} /> AI Advisor</span>
           </button>
           <button className={`subtab-btn ${subtab === 'calendar' ? 'active' : ''}`} onClick={() => setSubtab('calendar')}>
-            <span className="row" style={{ gap: 5 }}><Calendar size={14} /> Calendar</span>
+            <span className="row" style={{ gap: 5 }}><Calendar size={14} /> Cash Flow</span>
           </button>
         </div>
 
         {/* ───────────── OVERVIEW TAB ───────────── */}
         {subtab === 'overview' && (
           <div className="stack" style={{ gap: 14 }}>
+            <SafeToSpendCard pulse={plan.pulse} onOpen={() => setSubtab('calendar')} />
+
+            {plan.attention_cards.length > 0 && (
+              <div>
+                <div className="section-head"><div className="section-title">Needs your attention</div></div>
+                <AttentionFeed cards={plan.attention_cards} onAction={handleAttention} />
+              </div>
+            )}
+
             {/* Hero Health Card */}
             <div className="planner-hero">
               <div className="between">
@@ -429,7 +475,10 @@ export function Plan() {
               <div className="between">
                 <div>
                   <div className="card-title">Monthly Cash Flow</div>
-                  <div className="muted" style={{ fontSize: 11.5 }}>Total Inflow: {inr(cf.income)}</div>
+                  <div className="muted" style={{ fontSize: 11.5 }}>
+                    Total Inflow: {inr(cf.income)} ·{' '}
+                    <button style={{ color: 'var(--brand)', fontWeight: 600, fontSize: 11.5 }} onClick={() => setShowProfile(true)}>Edit</button>
+                  </div>
                 </div>
                 <span className={`pill ${plan.auto_budget.compliant ? 'pill-ok' : 'pill-warn'}`}>
                   {plan.auto_budget.compliant ? '50-30-20 Compliant' : 'Overspending Risk'}
@@ -568,17 +617,18 @@ export function Plan() {
             ) : (
               plan.goals.map(g => {
                 const prog = Math.min(100, g.progress_pct)
+                const GoalIcon = GOAL_ICONS[g.category] ?? Target
                 return (
                   <div key={g.id} className="goal-card">
                     <div className="goal-header">
                       <div className="row">
                         <div className="goal-icon">
-                          {g.category === 'emergency' ? '🛡️' : g.category === 'home' ? '🏡' : g.category === 'travel' ? '✈️' : g.category === 'education' ? '🎓' : '🎯'}
+                          <GoalIcon size={18} />
                         </div>
                         <div>
                           <div style={{ fontWeight: 700, fontSize: 14 }}>{g.name}</div>
                           <div className="muted" style={{ fontSize: 11.5 }}>
-                            Target: {g.target_date} ({g.months_remaining} mo remaining)
+                            By {monthYear(g.target_date)} · {Math.max(0, Math.round(g.months_remaining))} months left
                           </div>
                         </div>
                       </div>
@@ -630,6 +680,15 @@ export function Plan() {
                         ))}
                       </div>
                     )}
+
+                    <div className="goal-actions">
+                      <button className="btn btn-soft" onClick={() => setGoalSheet({ goal: g, mode: 'add' })}>
+                        <PiggyBank size={14} /> Add money
+                      </button>
+                      <button className="btn btn-ghost" onClick={() => setGoalSheet({ goal: g, mode: 'edit' })}>
+                        <Pencil size={13} /> Monthly saving
+                      </button>
+                    </div>
                   </div>
                 )
               })
@@ -677,7 +736,7 @@ export function Plan() {
             {simType === 'affordability' && (
               <div className="sim-box">
                 <div className="row">
-                  <DollarSign size={18} style={{ color: 'var(--brand)' }} />
+                  <IndianRupee size={18} style={{ color: 'var(--brand)' }} />
                   <div>
                     <div style={{ fontWeight: 700, fontSize: 14 }}>Can I Afford It?</div>
                     <div className="muted" style={{ fontSize: 11.5 }}>Test major purchases against your liquid runway & goals</div>
@@ -1225,6 +1284,16 @@ export function Plan() {
         {/* ───────────── CALENDAR TAB ───────────── */}
         {subtab === 'calendar' && (
           <div className="stack" style={{ gap: 14 }}>
+            <div className="card card-pad">
+              <div className="between" style={{ marginBottom: 10 }}>
+                <div>
+                  <div className="card-title">Balance forecast</div>
+                  <div className="muted" style={{ fontSize: 11.5 }}>Next 30 days · salary, debits and usual spending</div>
+                </div>
+              </div>
+              <ForecastChart forecast={plan.forecast} />
+            </div>
+
             <div className="between">
               <div>
                 <div className="section-title">Upcoming Obligations</div>
@@ -1244,11 +1313,11 @@ export function Plan() {
                 obligations30.map(o => (
                   <div key={o.id} className="list-row">
                     <div className="cat-icon cat-investment" style={{ width: 34, height: 34, fontSize: 14 }}>
-                      {o.category === 'sip' ? '📈' : o.category === 'emi' ? '🏦' : '📄'}
+                      {o.category === 'sip' ? <TrendingUp size={16} /> : o.category === 'emi' ? <Landmark size={16} /> : <ShieldCheck size={16} />}
                     </div>
                     <div className="grow">
                       <div className="t">{o.title}</div>
-                      <div className="s">Due {o.due} · {o.recipient || o.source || 'Direct debit'}</div>
+                      <div className="s">{dueLabel(o.due)} · {o.recipient || o.source || 'Direct debit'}</div>
                     </div>
                     <div style={{ textAlign: 'right' }}>
                       <div style={{ fontWeight: 700, fontSize: 13.5 }}>{inr(o.amount)}</div>
@@ -1270,6 +1339,10 @@ export function Plan() {
           </div>
         )}
       </div>
+
+      <ProfileSheet key={plan.profile.monthly_income + ':' + plan.profile.salary_day} open={showProfile}
+        onClose={() => setShowProfile(false)} profile={plan.profile} onSaved={afterSave} />
+      <GoalActionSheet goal={goalSheet?.goal ?? null} mode={goalSheet?.mode ?? 'add'} onClose={() => setGoalSheet(null)} onSaved={afterSave} />
 
       {/* ───────────── ADD GOAL MODAL SHEET ───────────── */}
       <Sheet open={showAddGoal} onClose={() => setShowAddGoal(false)} title="Create Financial Goal">

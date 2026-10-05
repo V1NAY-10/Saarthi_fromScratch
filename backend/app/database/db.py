@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 CREATE TABLE IF NOT EXISTS financial_profiles (
   user_id TEXT PRIMARY KEY, monthly_income REAL, income_source TEXT, income_verified INTEGER,
   essential_expenses REAL, discretionary_expenses REAL, target_runway_months REAL,
-  emergency_fund_target REAL, updated_at TEXT
+  emergency_fund_target REAL, updated_at TEXT, salary_day INTEGER
 );
 CREATE TABLE IF NOT EXISTS financial_goals (
   id TEXT PRIMARY KEY, user_id TEXT, name TEXT, category TEXT, target_amount REAL,
@@ -207,4 +207,14 @@ def init_schema(drop: bool = False) -> None:
                 if t != "sqlite_sequence":
                     conn.execute(f"DROP TABLE IF EXISTS {t}")
         conn.executescript(SCHEMA)
+        # Additive migrations for databases created before a column existed
+        for table, col, decl in ADDED_COLUMNS:
+            have = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if col not in have:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
         conn.commit()
+
+
+ADDED_COLUMNS = [
+    ("financial_profiles", "salary_day", "INTEGER"),
+]

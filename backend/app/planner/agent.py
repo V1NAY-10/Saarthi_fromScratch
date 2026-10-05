@@ -72,6 +72,11 @@ def _get_context_summary(user_id: str) -> Dict[str, Any]:
             "status": g["status"],
             "progress_pct": g["progress_pct"],
         } for g in cc["goals"]],
+        "safe_to_spend_per_day": cc["pulse"]["per_day"],
+        "safe_to_spend_until_payday": cc["pulse"]["total_until_payday"],
+        "next_payday": cc["pulse"]["next_payday"],
+        "committed_before_payday": cc["pulse"]["committed_before_payday"],
+        "forecast_lowest_balance": cc["forecast"]["lowest"],
         "upcoming_obligations_count": len(cc["obligations"]),
         "upcoming_sample": [{
             "title": o["title"],
@@ -163,6 +168,11 @@ If they asked why a goal is behind, explain the required monthly contribution vs
             delays = [f"{g['goal_name']} (+{g['projected_delay_months']} mo)" for g in sim_result["goal_impacts"] if g["projected_delay_months"] > 0]
             if delays:
                 reply += f" Note: This may shift your active goals: {', '.join(delays)}."
+    elif "safe" in text or ("spend" in text and ("today" in text or "how much" in text)):
+        reply = (f"You can safely spend about ₹{int(ctx['safe_to_spend_per_day']):,}/day "
+                 f"(₹{int(ctx['safe_to_spend_until_payday']):,} in total) until your next salary on {ctx['next_payday']}. "
+                 f"That already sets aside ₹{int(ctx['committed_before_payday']):,} of SIPs, EMIs and premiums due before payday, "
+                 "your essential costs and a one-week safety buffer.")
     elif "runway" in text or "emergency" in text:
         reply = f"Your liquid funds (₹{int(ctx['liquid_cash']):,}) provide approximately {ctx['runway_months']} months of emergency runway against essential expenses (₹{int(ctx['fixed_expenses'] + ctx['emis_monthly']):,}/mo). Your target is {ctx['target_runway_months']} months."
     elif "collision" in text or "shortfall" in text or "conflict" in text:
