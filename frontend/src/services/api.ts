@@ -4,11 +4,15 @@ import type {
   Sip, SipStartResult, StressTestResult, SystemInfo, VaultDocument, WhatIfResult,
 } from './types'
 
+// Backend origin when the frontend is hosted separately (e.g. https://saarthi-api.onrender.com).
+// Empty means same origin: the backend serves the built app, or Vite's dev proxy forwards /api.
+const API_BASE = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')
+
 let userId: string | null = null
 export function setApiUser(id: string | null) { userId = id }
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(API_BASE + path, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(userId ? { 'X-User-Id': userId } : {}), ...(init?.headers || {}) },
   })
@@ -66,13 +70,14 @@ export const api = {
     fd.append('file', file, filename)
     if (docType) fd.append('doc_type', docType)
     if (replaceId) fd.append('replace_document_id', replaceId)
-    const res = await fetch('/api/documents', { method: 'POST', body: fd, headers: userId ? { 'X-User-Id': userId } : {} })
+    const res = await fetch(`${API_BASE}/api/documents`, { method: 'POST', body: fd, headers: userId ? { 'X-User-Id': userId } : {} })
     if (!res.ok) { let d = res.statusText; try { d = (await res.json()).detail ?? d } catch { /* ignore */ } throw new Error(d) }
     return res.json() as Promise<VaultDocument>
   },
-  documentUrl: (versionId: string) => req<{ url: string }>(`/api/documents/versions/${versionId}/url`),
+  documentUrl: (versionId: string) =>
+    req<{ url: string }>(`/api/documents/versions/${versionId}/url`).then(r => ({ ...r, url: r.url.startsWith('/') ? API_BASE + r.url : r.url })),
   sampleBlob: async (kind: string) => {
-    const res = await fetch(`/api/samples/${kind}`, { headers: userId ? { 'X-User-Id': userId } : {} })
+    const res = await fetch(`${API_BASE}/api/samples/${kind}`, { headers: userId ? { 'X-User-Id': userId } : {} })
     if (!res.ok) throw new Error('Could not generate sample')
     const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? `${kind}.pdf`
     return { blob: await res.blob(), name }
